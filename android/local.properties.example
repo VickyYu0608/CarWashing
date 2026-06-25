@@ -1,0 +1,6 @@
+sdk.dir=C\:\\Users\\YOUR_USER\\AppData\\Local\\Android\\sdk
+flutter.sdk=C\:\\path\\to\\flutter
+
+# Get a key from Google Cloud Console and enable "Maps SDK for Android".
+# https://console.cloud.google.com/google/maps-apis/
+google.maps.api.key=YOUR_GOOGLE_MAPS_API_KEY
