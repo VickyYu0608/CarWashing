@@ -41,7 +41,7 @@ class HkDistrictPicker extends StatelessWidget {
         ),
         const SizedBox(height: 8),
         DropdownButtonFormField<HkMajorRegion>(
-          value: majorRegion,
+          initialValue: majorRegion,
           decoration: const InputDecoration(
             labelText: '三大区',
             border: OutlineInputBorder(),
@@ -58,7 +58,7 @@ class HkDistrictPicker extends StatelessWidget {
         ),
         const SizedBox(height: 12),
         DropdownButtonFormField<String>(
-          value: selectedDistrict.nameZh,
+          initialValue: selectedDistrict.nameZh,
           decoration: const InputDecoration(
             labelText: '18区',
             border: OutlineInputBorder(),
@@ -83,7 +83,7 @@ class HkDistrictPicker extends StatelessWidget {
         const SizedBox(height: 12),
         if (subAreas.isNotEmpty)
           DropdownButtonFormField<String>(
-            value: selectedSubArea?.nameZh,
+            initialValue: selectedSubArea?.nameZh,
             decoration: const InputDecoration(
               labelText: '细分区域',
               border: OutlineInputBorder(),

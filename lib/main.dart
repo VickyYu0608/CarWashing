@@ -6,6 +6,8 @@ import 'package:car_washing_app/country_codes.dart';
 import 'package:car_washing_app/hk_district_picker.dart';
 import 'package:car_washing_app/hk_districts.dart';
 import 'package:car_washing_app/hk_sub_areas.dart';
+import 'package:car_washing_app/payment/payment_models.dart';
+import 'package:car_washing_app/payment/payment_page.dart';
 import 'package:car_washing_app/share_referral.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -207,6 +209,10 @@ class WashOrder {
     this.remainingSeconds = 0,
     this.failureReason,
     this.usedFreeWashCredit = false,
+    this.paymentTransactionId,
+    this.paymentMethod,
+    this.providerReference,
+    this.paidAt,
   });
 
   final String id;
@@ -222,6 +228,10 @@ class WashOrder {
   int remainingSeconds;
   String? failureReason;
   final bool usedFreeWashCredit;
+  String? paymentTransactionId;
+  String? paymentMethod;
+  String? providerReference;
+  DateTime? paidAt;
 }
 
 class Reservation {
@@ -631,6 +641,40 @@ class AppStore extends ChangeNotifier {
         .toList(growable: false);
   }
 
+  double receivedRevenueForCurrentShop({String? storeId}) {
+    return ordersForCurrentShop().where((order) {
+      if (storeId != null && order.storeId != storeId) {
+        return false;
+      }
+      if (order.paidAt == null || order.usedFreeWashCredit) {
+        return false;
+      }
+      return order.status != OrderStatus.created &&
+          order.status != OrderStatus.failed &&
+          order.status != OrderStatus.refunded;
+    }).fold<double>(0, (sum, order) => sum + order.amount);
+  }
+
+  int pendingPaymentCountForCurrentShop({String? storeId}) {
+    return ordersForCurrentShop()
+        .where(
+          (order) =>
+              order.status == OrderStatus.created &&
+              (storeId == null || order.storeId == storeId),
+        )
+        .length;
+  }
+
+  int paidOrderCountForCurrentShop({String? storeId}) {
+    return ordersForCurrentShop()
+        .where(
+          (order) =>
+              order.paidAt != null &&
+              (storeId == null || order.storeId == storeId),
+        )
+        .length;
+  }
+
   int get idleDeviceCount =>
       devices.where((device) => device.status == DeviceStatus.idle).length;
 
@@ -689,10 +733,9 @@ class AppStore extends ChangeNotifier {
     return null;
   }
 
-  Future<WashOrder> createPaidOrder({
+  Future<WashOrder> createPendingOrder({
     required String deviceQrCode,
     required String packageId,
-    required bool simulatedPaid,
     bool useFreeWash = false,
   }) async {
     final account = currentAccount;
@@ -730,13 +773,28 @@ class AppStore extends ChangeNotifier {
     );
     orders.insert(0, order);
     notifyListeners();
-
-    await Future<void>.delayed(const Duration(milliseconds: 500));
-    if (simulatedPaid) {
-      order.status = OrderStatus.paid;
-    }
-    notifyListeners();
     return order;
+  }
+
+  Future<void> markOrderPaid(
+    String orderId, {
+    required String transactionId,
+    required String paymentMethod,
+    String? providerReference,
+  }) async {
+    final order = orders.firstWhere(
+      (candidate) => candidate.id == orderId,
+      orElse: () => throw StateError('找不到订单'),
+    );
+    if (order.status != OrderStatus.created) {
+      throw StateError('订单状态不可付款');
+    }
+    order.status = OrderStatus.paid;
+    order.paymentTransactionId = transactionId;
+    order.paymentMethod = paymentMethod;
+    order.providerReference = providerReference;
+    order.paidAt = DateTime.now();
+    notifyListeners();
   }
 
   Future<void> startOrder(WashOrder order) async {
@@ -2228,7 +2286,7 @@ class _ReservationFormCardState extends State<ReservationFormCard> {
             const Text('新建预约', style: TextStyle(fontWeight: FontWeight.w800)),
             const SizedBox(height: 12),
             DropdownButtonFormField<String>(
-              value: selectedStoreId,
+              initialValue: selectedStoreId,
               decoration: const InputDecoration(
                 labelText: '选择门店',
                 border: OutlineInputBorder(),
@@ -2265,7 +2323,7 @@ class _ReservationFormCardState extends State<ReservationFormCard> {
               children: [
                 Expanded(
                   child: DropdownButtonFormField<DateTime>(
-                    value: selectedDate,
+                    initialValue: selectedDate,
                     decoration: const InputDecoration(
                       labelText: '预约日期',
                       border: OutlineInputBorder(),
@@ -2287,7 +2345,7 @@ class _ReservationFormCardState extends State<ReservationFormCard> {
                 const SizedBox(width: 12),
                 Expanded(
                   child: DropdownButtonFormField<String>(
-                    value: selectedTime,
+                    initialValue: selectedTime,
                     decoration: const InputDecoration(
                       labelText: '预约时间',
                       border: OutlineInputBorder(),
@@ -2399,12 +2457,20 @@ class _UserHomePageState extends State<UserHomePage> {
   LatLng userLocation = fallbackUserLocation;
   CarWashStore? selectedStore;
   bool locating = true;
+  bool mapReady = false;
   String locationMessage = '正在获取定位...';
 
   @override
   void initState() {
     super.initState();
-    _loadLocation();
+    // Defer heavy Google Map init so the first frame can render without ANR.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+      setState(() => mapReady = true);
+      _loadLocation();
+    });
   }
 
   @override
@@ -2454,14 +2520,35 @@ class _UserHomePageState extends State<UserHomePage> {
           subtitle: '地图显示附近洗车店，列表按距离由近到远排序。',
         ),
         const SizedBox(height: 12),
-        CarWashMapView(
-          key: mapKey,
-          height: 220,
-          cameraTarget: userLocation,
-          markers: markers,
-          polylines: polylines,
-          onTap: (_) {},
-        ),
+        if (mapReady)
+          CarWashMapView(
+            key: mapKey,
+            height: 220,
+            cameraTarget: userLocation,
+            markers: markers,
+            polylines: polylines,
+            myLocationEnabled: !locating,
+            onTap: (_) {},
+          )
+        else
+          SizedBox(
+            height: 220,
+            child: Card(
+              child: Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const CircularProgressIndicator(),
+                    const SizedBox(height: 12),
+                    Text(
+                      locationMessage,
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
         const SizedBox(height: 8),
         Text(locationMessage),
         if (locating) ...[
@@ -2550,8 +2637,8 @@ class _UserHomePageState extends State<UserHomePage> {
         return;
       }
       final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-      );
+        desiredAccuracy: LocationAccuracy.medium,
+      ).timeout(const Duration(seconds: 8));
       final location = LatLng(position.latitude, position.longitude);
       setState(() {
         userLocation = location;
@@ -2912,7 +2999,6 @@ class ScanPayPage extends StatefulWidget {
 class _ScanPayPageState extends State<ScanPayPage> {
   late String qrCode;
   late String selectedPackageId;
-  bool simulatedPaid = true;
   bool useFreeWashThisOrder = false;
   bool isProcessing = false;
   String? error;
@@ -2962,8 +3048,8 @@ class _ScanPayPageState extends State<ScanPayPage> {
             padding: const EdgeInsets.all(16),
             children: [
               const SectionTitle(
-                title: '模拟扫码',
-                subtitle: '选择一个设备二维码，实际项目可替换为摄像头扫码 SDK。',
+                title: '扫码支付',
+                subtitle: '选择设备与套餐，确认后进入收银台完成付款。',
               ),
               const SizedBox(height: 12),
               DropdownButtonFormField<String>(
@@ -3074,15 +3160,6 @@ class _ScanPayPageState extends State<ScanPayPage> {
                       : null,
                 ),
               ),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                value: simulatedPaid,
-                onChanged: isProcessing
-                    ? null
-                    : (value) => setState(() => simulatedPaid = value),
-                title: const Text('模拟已扫码并已付款'),
-                subtitle: const Text('打开后会直接新增订单并激活洗车流程。'),
-              ),
               if (error != null) ...[
                 const SizedBox(height: 8),
                 Text(error!, style: const TextStyle(color: Colors.red)),
@@ -3090,7 +3167,7 @@ class _ScanPayPageState extends State<ScanPayPage> {
               const SizedBox(height: 20),
               FilledButton.icon(
                 onPressed:
-                    isProcessing ? null : () => _payAndStart(context, appStore),
+                    isProcessing ? null : () => _goToPayment(context, appStore),
                 icon: isProcessing
                     ? const SizedBox(
                         width: 18,
@@ -3098,7 +3175,13 @@ class _ScanPayPageState extends State<ScanPayPage> {
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
                     : const Icon(Icons.payments_outlined),
-                label: Text(isProcessing ? '处理中...' : '创建订单并进入洗车流程'),
+                label: Text(
+                  isProcessing
+                      ? '处理中...'
+                      : actualAmount <= 0
+                          ? '确认并启动洗车'
+                          : '前往付款 ¥${actualAmount.toStringAsFixed(0)}',
+                ),
               ),
             ],
           );
@@ -3107,28 +3190,96 @@ class _ScanPayPageState extends State<ScanPayPage> {
     );
   }
 
-  Future<void> _payAndStart(BuildContext context, AppStore appStore) async {
+  Future<void> _goToPayment(BuildContext context, AppStore appStore) async {
+    if (isProcessing) {
+      return;
+    }
+    if (qrCode.trim().isEmpty) {
+      setState(() => error = '请选择设备二维码');
+      return;
+    }
+    if (selectedPackageId.trim().isEmpty) {
+      setState(() => error = '请选择套餐');
+      return;
+    }
+
     setState(() {
       isProcessing = true;
       error = null;
     });
     try {
-      final order = await appStore.createPaidOrder(
+      final order = await appStore.createPendingOrder(
         deviceQrCode: qrCode,
         packageId: selectedPackageId,
-        simulatedPaid: simulatedPaid,
         useFreeWash: useFreeWashThisOrder,
       );
-      if (simulatedPaid) {
-        await appStore.startOrder(order);
-      }
       if (!context.mounted) {
         return;
       }
-      Navigator.of(context).pop();
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('订单 ${order.id} 已创建')));
+
+      if (order.amount <= 0) {
+        await appStore.markOrderPaid(
+          order.id,
+          transactionId: 'FREE-${order.id}',
+          paymentMethod: '免费洗车',
+        );
+        await appStore.startOrder(order);
+        if (!context.mounted) {
+          return;
+        }
+        Navigator.of(context).pop();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('已使用免费洗车 · 订单 ${order.id} 已启动')),
+        );
+        return;
+      }
+
+      final selectedDevice = appStore.deviceByQr(qrCode);
+      final selectedStore = selectedDevice == null
+          ? widget.initialStore
+          : appStore.storeForDevice(selectedDevice.id);
+      final packages =
+          selectedStore?.packages ?? appStore.approvedStores().first.packages;
+      final selectedPackage = packages.firstWhere(
+        (washPackage) => washPackage.id == selectedPackageId,
+      );
+      final storeName = selectedStore?.name ?? '洗车门店';
+      final packageName = selectedPackage.name;
+
+      final paid = await Navigator.of(context).push<bool>(
+        MaterialPageRoute(
+          builder: (_) => PaymentPage(
+            checkout: PaymentCheckoutArgs(
+              orderId: order.id,
+              storeName: storeName,
+              packageName: packageName,
+              amount: order.amount,
+              usedFreeWash: order.usedFreeWashCredit,
+              payerDisplayName: appStore.currentAccount?.displayName ?? '用户',
+              payerPhone: appStore.currentAccount?.phone ?? '',
+              onPaymentConfirmed: ({
+                required transactionId,
+                required method,
+                providerReference,
+              }) async {
+                await appStore.markOrderPaid(
+                  order.id,
+                  transactionId: transactionId,
+                  paymentMethod: method.label,
+                  providerReference: providerReference,
+                );
+                final latestOrder = appStore.orders.firstWhere(
+                  (candidate) => candidate.id == order.id,
+                );
+                await appStore.startOrder(latestOrder);
+              },
+            ),
+          ),
+        ),
+      );
+      if (paid == true && context.mounted) {
+        Navigator.of(context).pop();
+      }
     } on StateError catch (exception) {
       setState(() => error = exception.message);
     } finally {
@@ -3321,7 +3472,7 @@ class _ShopOrdersPageState extends State<ShopOrdersPage> {
           children: [
             const TopBar(
               title: '商家订单',
-              subtitle: '按店铺筛选订单，查看完成数量和洗车流程状态。',
+              subtitle: '用户付款后实时同步收款，可按店铺筛选查看。',
             ),
             StoreFilterDropdown(
               stores: stores,
@@ -3329,10 +3480,33 @@ class _ShopOrdersPageState extends State<ShopOrdersPage> {
               onChanged: (value) => setState(() => selectedStoreId = value),
             ),
             const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: MetricCard(
+                    label: '已收款',
+                    value:
+                        '¥${appStore.receivedRevenueForCurrentShop(storeId: selectedStoreId == 'all' ? null : selectedStoreId).toStringAsFixed(0)}',
+                    icon: Icons.payments,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: MetricCard(
+                    label: '待支付',
+                    value:
+                        '${appStore.pendingPaymentCountForCurrentShop(storeId: selectedStoreId == 'all' ? null : selectedStoreId)} 笔',
+                    icon: Icons.hourglass_empty,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
             MetricCard(
-                label: '已完成订单',
-                value: '$completed / ${orders.length}',
-                icon: Icons.done_all),
+              label: '已完成订单',
+              value: '$completed / ${orders.length}',
+              icon: Icons.done_all,
+            ),
             const SizedBox(height: 12),
             if (orders.isEmpty)
               const EmptyState(
@@ -3873,6 +4047,10 @@ class ShopStoreCard extends StatelessWidget {
             const SizedBox(height: 6),
             Text(store.address),
             Text('服务类型：${store.serviceSummary}'),
+            Text(
+              '累计收款 ¥${appStore.receivedRevenueForCurrentShop(storeId: store.id).toStringAsFixed(0)} · '
+              '已付 ${appStore.paidOrderCountForCurrentShop(storeId: store.id)} 笔',
+            ),
             if (showAddBay) ...[
               const SizedBox(height: 8),
               OutlinedButton.icon(
@@ -4351,6 +4529,34 @@ class OrderCard extends StatelessWidget {
             ),
             const SizedBox(height: 6),
             Text('流程：${order.flowDescription}'),
+            if (order.paidAt != null) ...[
+              const SizedBox(height: 8),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.green.shade50,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      order.usedFreeWashCredit ? '已核销免费洗车' : '已收款 ¥${order.amount.toStringAsFixed(0)}',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w700,
+                        color: Colors.green.shade800,
+                      ),
+                    ),
+                    if (order.paymentMethod != null)
+                      Text('支付方式：${order.paymentMethod}'),
+                    if (order.paymentTransactionId != null)
+                      Text('交易号：${order.paymentTransactionId}'),
+                    Text('到账时间：${_formatPaidAt(order.paidAt!)}'),
+                  ],
+                ),
+              ),
+            ],
             const SizedBox(height: 8),
             LinearProgressIndicator(value: _progress(washPackage, order)),
             const SizedBox(height: 8),
@@ -4366,14 +4572,6 @@ class OrderCard extends StatelessWidget {
                 style: const TextStyle(color: Colors.red),
               ),
             ],
-            if (order.status == OrderStatus.created) ...[
-              const SizedBox(height: 12),
-              FilledButton.tonalIcon(
-                onPressed: () => appStore.simulatePaymentAndStart(order),
-                icon: const Icon(Icons.payments_outlined),
-                label: const Text('模拟付款并启动'),
-              ),
-            ],
             if (order.status == OrderStatus.running) ...[
               const SizedBox(height: 12),
               FilledButton.tonalIcon(
@@ -4386,6 +4584,15 @@ class OrderCard extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  String _formatPaidAt(DateTime paidAt) {
+    final local = paidAt.toLocal();
+    final month = local.month.toString().padLeft(2, '0');
+    final day = local.day.toString().padLeft(2, '0');
+    final hour = local.hour.toString().padLeft(2, '0');
+    final minute = local.minute.toString().padLeft(2, '0');
+    return '${local.year}-$month-$day $hour:$minute';
   }
 
   double _progress(ServicePackage washPackage, WashOrder order) {
@@ -4686,7 +4893,7 @@ extension WashOrderFlowText on WashOrder {
   String get flowDescription {
     return switch (status) {
       OrderStatus.created => '1. 已创建订单，等待扫码或线上付款',
-      OrderStatus.paid => '2. 已付款，等待设备启动',
+      OrderStatus.paid => '2. 用户已付款，商家已收款，等待设备启动',
       OrderStatus.starting => '3. 正在向设备发送启动指令',
       OrderStatus.running => '4. 洗车中，请按设备提示完成清洗',
       OrderStatus.completed => '5. 洗车完成，订单已结束',

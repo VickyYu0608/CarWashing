@@ -38,7 +38,7 @@ if (googleMapsApiKey.isEmpty()) {
 android {
     namespace = "com.example.car_washing_app"
     compileSdk = flutter.compileSdkVersion
-    ndkVersion = "25.1.8937393"
+    ndkVersion = "27.0.12077973"
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -53,8 +53,8 @@ android {
         applicationId = "com.example.car_washing_app"
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
-        versionCode = flutter.versionCode()
-        versionName = flutter.versionName()
+        versionCode = flutter.versionCode
+        versionName = flutter.versionName
         resValue("string", "google_maps_api_key", googleMapsApiKey)
     }
 
