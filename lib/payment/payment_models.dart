@@ -38,7 +38,7 @@ extension PaymentMethodLabel on PaymentMethod {
 
   String get subtitle => switch (this) {
         PaymentMethod.alipay => '跳转支付宝 App 由本人账户确认支付',
-        PaymentMethod.wechatPay => '跳转微信 App 由本人账户确认支付',
+        PaymentMethod.wechatPay => '跳转微信收银台，显示金额并输入支付密码',
         PaymentMethod.applePay => 'Face ID / Touch ID 确认支付',
         PaymentMethod.creditCard => 'Visa · Mastercard · UnionPay',
       };

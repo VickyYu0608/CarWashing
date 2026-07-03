@@ -238,6 +238,26 @@ class ApiClient {
         (r) => jsonDecode(r.body) as Map<String, dynamic>,
       );
 
+  static Future<Map<String, dynamic>> createWeChatPrepayOrder({
+    required String orderId,
+    required double amount,
+    required String description,
+    required String intentId,
+  }) =>
+      _request(
+        () => http.post(
+          Uri.parse(apiUrl('/api/payments/wechat/prepay')),
+          headers: _headers(jsonBody: true),
+          body: jsonEncode({
+            'order_id': orderId,
+            'amount': amount,
+            'description': description,
+            'intent_id': intentId,
+          }),
+        ),
+        (r) => jsonDecode(r.body) as Map<String, dynamic>,
+      );
+
   static Future<List<Map<String, dynamic>>> fetchReservations() => _request(
         () => http.get(
           Uri.parse(apiUrl('/api/reservations')),
