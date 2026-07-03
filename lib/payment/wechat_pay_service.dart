@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:car_washing_app/api_client.dart';
-import 'package:car_washing_app/payment/payment_config.dart';
 import 'package:car_washing_app/payment/payment_models.dart';
 import 'package:car_washing_app/payment/wechat_pay_cashier_page.dart';
 import 'package:flutter/material.dart';
@@ -30,36 +29,24 @@ class WeChatPayResult {
       WeChatPayResult(success: false, errorMessage: message);
 }
 
-/// WeChat Pay via official SDK when merchant prepay is available; otherwise
-/// shows a cashier page with amount + password entry.
 class WeChatPayService {
   WeChatPayService._();
 
   static final WeChatPayService instance = WeChatPayService._();
 
   final Fluwx _fluwx = Fluwx();
-  bool _initialized = false;
+  String? _registeredAppId;
   FluwxCancelable? _responseSubscription;
 
-  Future<void> ensureInitialized() async {
-    if (_initialized) {
+  Future<void> _ensureRegistered(String appId) async {
+    if (_registeredAppId == appId) {
       return;
     }
-    if (PaymentConfig.hasWeChatAppId) {
-      await _fluwx.registerApi(
-        appId: PaymentConfig.weChatAppId,
-        doOnAndroid: true,
-        doOnIOS: true,
-        universalLink: PaymentConfig.weChatUniversalLink.isEmpty
-            ? null
-            : PaymentConfig.weChatUniversalLink,
-      );
-    }
-    _initialized = true;
+    await _fluwx.registerApi(appId: appId, doOnAndroid: true, doOnIOS: true);
+    _registeredAppId = appId;
   }
 
   Future<bool> isWeChatInstalled() async {
-    await ensureInitialized();
     return _fluwx.isWeChatInstalled;
   }
 
@@ -68,13 +55,12 @@ class WeChatPayService {
     required PaymentSession session,
     required PaymentIntent intent,
   }) async {
-    await ensureInitialized();
-
     final prepay = await _fetchPrepayParams(session: session, intent: intent);
     if (prepay != null) {
       if (!await isWeChatInstalled()) {
         return WeChatPayResult.failure('未检测到微信 App，请先安装微信后再支付');
       }
+      await _ensureRegistered(prepay['appid']?.toString() ?? '');
       return _payWithSdk(prepay);
     }
 
@@ -99,16 +85,20 @@ class WeChatPayService {
     required PaymentSession session,
     required PaymentIntent intent,
   }) async {
-    if (!PaymentConfig.hasWeChatAppId) {
+    if (!ApiClient.useBackend) {
       return null;
     }
     try {
-      return await ApiClient.createWeChatPrepayOrder(
+      final payload = await ApiClient.createWeChatPrepayOrder(
         orderId: session.orderId,
         amount: session.amount,
         description: session.productSummary,
         intentId: intent.intentId,
       );
+      if (payload['ready'] == true) {
+        return payload;
+      }
+      return null;
     } on ApiConnectionException {
       return null;
     } on ApiException {
@@ -142,7 +132,7 @@ class WeChatPayService {
 
     final launched = await _fluwx.pay(
       which: Payment(
-        appId: prepay['appid']?.toString() ?? PaymentConfig.weChatAppId,
+        appId: prepay['appid']?.toString() ?? '',
         partnerId: prepay['partnerid']?.toString() ?? '',
         prepayId: prepay['prepayid']?.toString() ?? '',
         packageValue: prepay['package']?.toString() ?? 'Sign=WXPay',

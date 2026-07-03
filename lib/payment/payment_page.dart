@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:car_washing_app/payment/api_payment_gateway.dart';
 import 'package:car_washing_app/payment/payment_coordinator.dart';
-import 'package:car_washing_app/payment/payment_external_launcher.dart';
 import 'package:car_washing_app/payment/payment_models.dart';
 import 'package:car_washing_app/payment/payment_provider_page.dart';
 import 'package:car_washing_app/payment/payment_receipt_page.dart';
@@ -47,7 +47,7 @@ class PaymentPage extends StatefulWidget {
 }
 
 class _PaymentPageState extends State<PaymentPage> {
-  final _coordinator = PaymentCoordinator();
+  final _coordinator = PaymentCoordinator(gateway: resolvePaymentGateway());
   final _formKey = GlobalKey<FormState>();
   final _cardholderController = TextEditingController();
   final _cardNumberController = TextEditingController();
@@ -185,21 +185,6 @@ class _PaymentPageState extends State<PaymentPage> {
     final confirmed = await _confirmAmountDialog();
     if (!confirmed || !mounted) {
       return;
-    }
-
-    if (_selectedMethod == PaymentMethod.alipay) {
-      final installed =
-          await PaymentExternalLauncher.isAppInstalled(_selectedMethod!);
-      if (!mounted) {
-        return;
-      }
-      if (!installed) {
-        setState(() {
-          _errorMessage = '未检测到支付宝 App，请先安装支付宝后再支付';
-          _phase = PaymentPhase.failed;
-        });
-        return;
-      }
     }
 
     setState(() => _phase = PaymentPhase.processing);

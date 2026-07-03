@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:car_washing_app/payment/payment_external_launcher.dart';
+import 'package:car_washing_app/payment/alipay_pay_service.dart';
 import 'package:car_washing_app/payment/payment_gateway.dart';
 import 'package:car_washing_app/payment/payment_models.dart';
 import 'package:car_washing_app/payment/wechat_pay_service.dart';
@@ -21,11 +21,8 @@ class PaymentProviderPage extends StatefulWidget {
   State<PaymentProviderPage> createState() => _PaymentProviderPageState();
 }
 
-class _PaymentProviderPageState extends State<PaymentProviderPage>
-    with WidgetsBindingObserver {
+class _PaymentProviderPageState extends State<PaymentProviderPage> {
   bool _redirecting = true;
-  bool _externalLaunched = false;
-  bool _returnedFromExternal = false;
   bool _userConfirmed = false;
   bool _isSubmitting = false;
   bool _isLaunching = false;
@@ -38,17 +35,15 @@ class _PaymentProviderPageState extends State<PaymentProviderPage>
   PaymentMethod get method => request.intent.method;
 
   bool get _usesWeChatPay => method == PaymentMethod.wechatPay;
-
-  bool get _usesExternalApp => method == PaymentMethod.alipay;
+  bool get _usesAlipayPay => method == PaymentMethod.alipay;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
     if (_usesWeChatPay) {
       _startWeChatPaymentFlow();
-    } else if (_usesExternalApp) {
-      _startExternalPaymentFlow();
+    } else if (_usesAlipayPay) {
+      _startAlipayPaymentFlow();
     } else {
       _redirecting = false;
     }
@@ -108,7 +103,7 @@ class _PaymentProviderPageState extends State<PaymentProviderPage>
     });
   }
 
-  Future<void> _startExternalPaymentFlow() async {
+  Future<void> _startAlipayPaymentFlow() async {
     _redirectTimer?.cancel();
     _redirectTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (!mounted) {
@@ -117,61 +112,54 @@ class _PaymentProviderPageState extends State<PaymentProviderPage>
       }
       if (_redirectSeconds <= 1) {
         timer.cancel();
-        _openExternalPaymentApp();
+        _launchAlipayPayment();
         return;
       }
       setState(() => _redirectSeconds -= 1);
     });
   }
 
-  Future<void> _openExternalPaymentApp() async {
+  Future<void> _launchAlipayPayment() async {
     if (_isLaunching) {
       return;
     }
     setState(() {
+      _redirecting = false;
       _isLaunching = true;
       _errorMessage = null;
     });
 
-    final result = await PaymentExternalLauncher.launch(
-      method: method,
+    final result = await AlipayPayService.instance.pay(
+      context: context,
       session: session,
+      intent: request.intent,
     );
 
     if (!mounted) {
       return;
     }
 
-    if (!result.launched) {
-      setState(() {
-        _redirecting = false;
-        _isLaunching = false;
-        _errorMessage = result.errorMessage;
-      });
+    if (result.success && result.providerReference != null) {
+      Navigator.of(context).pop(
+        ProviderAuthorizationResult.approved(result.providerReference!),
+      );
+      return;
+    }
+
+    if (result.userCancelled) {
+      Navigator.of(context).pop(ProviderAuthorizationResult.cancelled());
       return;
     }
 
     setState(() {
-      _redirecting = false;
-      _externalLaunched = true;
       _isLaunching = false;
+      _errorMessage = result.errorMessage ?? '支付宝支付失败';
     });
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (!_usesExternalApp || !_externalLaunched || _isSubmitting) {
-      return;
-    }
-    if (state == AppLifecycleState.resumed) {
-      setState(() => _returnedFromExternal = true);
-    }
   }
 
   @override
   void dispose() {
     _redirectTimer?.cancel();
-    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
@@ -221,10 +209,6 @@ class _PaymentProviderPageState extends State<PaymentProviderPage>
     await _completeAuthorization(userConfirmedInProvider: true);
   }
 
-  Future<void> _confirmExternalPayment() async {
-    await _completeAuthorization(userConfirmedInProvider: true);
-  }
-
   Future<void> _confirmApplePay() async {
     if (!_userConfirmed) {
       setState(() => _errorMessage = '请确认 Apple Pay 付款信息');
@@ -270,7 +254,7 @@ class _PaymentProviderPageState extends State<PaymentProviderPage>
 
   @override
   Widget build(BuildContext context) {
-    if (_redirecting && (_usesExternalApp || _usesWeChatPay)) {
+    if (_redirecting && (_usesWeChatPay || _usesAlipayPay)) {
       return _RedirectSplash(
         method: method,
         seconds: _redirectSeconds,
@@ -290,21 +274,15 @@ class _PaymentProviderPageState extends State<PaymentProviderPage>
       );
     }
 
-    if (_usesExternalApp) {
-      return _ExternalPaymentReturnView(
-        method: method,
+    if (_usesAlipayPay && _errorMessage != null) {
+      return _AlipayPayErrorView(
         session: session,
-        returnedFromExternal: _returnedFromExternal,
-        externalLaunched: _externalLaunched,
-        isSubmitting: _isSubmitting,
-        isLaunching: _isLaunching,
-        errorMessage: _errorMessage,
-        onOpenApp: _openExternalPaymentApp,
-        onConfirmPaid: _confirmExternalPayment,
+        errorMessage: _errorMessage!,
+        isRetrying: _isLaunching,
+        onRetry: _launchAlipayPayment,
         onCancel: () => Navigator.of(context).pop(
           ProviderAuthorizationResult.cancelled(),
         ),
-        onInstallApp: () => PaymentExternalLauncher.openStoreListing(method),
       );
     }
 
@@ -495,169 +473,66 @@ class _WeChatPayErrorView extends StatelessWidget {
   }
 }
 
-class _ExternalPaymentReturnView extends StatelessWidget {
-  const _ExternalPaymentReturnView({
-    required this.method,
+class _AlipayPayErrorView extends StatelessWidget {
+  const _AlipayPayErrorView({
     required this.session,
-    required this.returnedFromExternal,
-    required this.externalLaunched,
-    required this.isSubmitting,
-    required this.isLaunching,
-    required this.onOpenApp,
-    required this.onConfirmPaid,
+    required this.errorMessage,
+    required this.isRetrying,
+    required this.onRetry,
     required this.onCancel,
-    required this.onInstallApp,
-    this.errorMessage,
   });
 
-  final PaymentMethod method;
   final PaymentSession session;
-  final bool returnedFromExternal;
-  final bool externalLaunched;
-  final bool isSubmitting;
-  final bool isLaunching;
-  final String? errorMessage;
-  final VoidCallback onOpenApp;
-  final VoidCallback onConfirmPaid;
+  final String errorMessage;
+  final bool isRetrying;
+  final VoidCallback onRetry;
   final VoidCallback onCancel;
-  final Future<bool> Function() onInstallApp;
-
-  Color get _color => switch (method) {
-        PaymentMethod.alipay => const Color(0xff1677ff),
-        PaymentMethod.wechatPay => const Color(0xff07c160),
-        _ => Colors.black,
-      };
 
   @override
   Widget build(BuildContext context) {
-    final waitingInExternalApp = externalLaunched && !returnedFromExternal;
-
-    return PopScope(
-      canPop: !isSubmitting,
-      child: Scaffold(
-        backgroundColor: _color,
-        appBar: AppBar(
-          backgroundColor: _color,
-          foregroundColor: Colors.white,
-          title: Text('${method.providerName} · 安全支付'),
-          leading: isSubmitting
-              ? null
-              : IconButton(
-                  icon: const Icon(Icons.close),
-                  onPressed: onCancel,
-                ),
-        ),
-        body: ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            _ProviderPaymentCard(
-              method: method,
-              session: session,
+    return Scaffold(
+      backgroundColor: const Color(0xff1677ff),
+      appBar: AppBar(
+        backgroundColor: const Color(0xff1677ff),
+        foregroundColor: Colors.white,
+        title: const Text('支付宝'),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          _ProviderPaymentCard(
+            method: PaymentMethod.alipay,
+            session: session,
+          ),
+          const SizedBox(height: 20),
+          Text(
+            errorMessage,
+            style: const TextStyle(color: Colors.white, height: 1.5),
+          ),
+          const SizedBox(height: 24),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Colors.white,
+              foregroundColor: const Color(0xff1677ff),
+              minimumSize: const Size.fromHeight(48),
             ),
-            const SizedBox(height: 20),
-            Icon(
-              waitingInExternalApp ? Icons.open_in_new : Icons.check_circle_outline,
-              color: Colors.white,
-              size: 56,
+            onPressed: isRetrying ? null : onRetry,
+            child: isRetrying
+                ? const SizedBox(
+                    width: 22,
+                    height: 22,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Text('重试支付宝支付'),
+          ),
+          TextButton(
+            onPressed: isRetrying ? null : onCancel,
+            child: Text(
+              '取消支付',
+              style: TextStyle(color: Colors.white.withOpacity(0.9)),
             ),
-            const SizedBox(height: 16),
-            Text(
-              waitingInExternalApp
-                  ? '正在${method.providerName}中完成支付'
-                  : '请确认是否已在${method.providerName}完成支付',
-              textAlign: TextAlign.center,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 20,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-            const SizedBox(height: 10),
-            Text(
-              waitingInExternalApp
-                  ? '支付密码 / 指纹请在${method.providerName} App 内完成。\n完成后请返回本 App 继续。'
-                  : '如未完成支付，可重新打开${method.providerName}。',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: Colors.white.withOpacity(0.9),
-                height: 1.5,
-              ),
-            ),
-            if (errorMessage != null) ...[
-              const SizedBox(height: 16),
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.red.shade100,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Text(errorMessage!, style: const TextStyle(color: Colors.red)),
-              ),
-            ],
-            const SizedBox(height: 28),
-            if (!externalLaunched || errorMessage != null) ...[
-              FilledButton(
-                style: FilledButton.styleFrom(
-                  backgroundColor: Colors.white,
-                  foregroundColor: _color,
-                  minimumSize: const Size.fromHeight(48),
-                ),
-                onPressed: isLaunching ? null : onOpenApp,
-                child: isLaunching
-                    ? const SizedBox(
-                        width: 22,
-                        height: 22,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : Text('打开${method.providerName}'),
-              ),
-              const SizedBox(height: 12),
-              OutlinedButton(
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: Colors.white,
-                  side: const BorderSide(color: Colors.white),
-                  minimumSize: const Size.fromHeight(48),
-                ),
-                onPressed: () => onInstallApp(),
-                child: Text('去安装${method.providerName}'),
-              ),
-            ] else ...[
-              FilledButton(
-                style: FilledButton.styleFrom(
-                  backgroundColor: Colors.white,
-                  foregroundColor: _color,
-                  minimumSize: const Size.fromHeight(48),
-                ),
-                onPressed: isSubmitting || !returnedFromExternal ? null : onConfirmPaid,
-                child: isSubmitting
-                    ? const SizedBox(
-                        width: 22,
-                        height: 22,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : Text(returnedFromExternal ? '我已在${method.providerName}完成支付' : '返回 App 后可确认'),
-              ),
-              const SizedBox(height: 12),
-              OutlinedButton(
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: Colors.white,
-                  side: const BorderSide(color: Colors.white),
-                  minimumSize: const Size.fromHeight(48),
-                ),
-                onPressed: isLaunching || isSubmitting ? null : onOpenApp,
-                child: Text('重新打开${method.providerName}'),
-              ),
-            ],
-            const SizedBox(height: 12),
-            TextButton(
-              onPressed: isSubmitting ? null : onCancel,
-              child: Text(
-                '取消支付',
-                style: TextStyle(color: Colors.white.withOpacity(0.9)),
-              ),
-            ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -710,7 +585,7 @@ class _RedirectSplash extends StatelessWidget {
               const CircularProgressIndicator(color: Colors.white),
               const SizedBox(height: 16),
               Text(
-                '即将打开${method.providerName} App\n请在${method.providerName}内完成支付',
+                '即将打开${method.providerName}收银台\n请输入支付密码完成付款',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: Colors.white.withOpacity(0.85), height: 1.5),
               ),

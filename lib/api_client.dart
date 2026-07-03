@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:car_washing_app/api_config.dart';
+import 'package:car_washing_app/payment/payment_models.dart';
 import 'package:http/http.dart' as http;
 
 class ApiException implements Exception {
@@ -257,6 +258,63 @@ class ApiClient {
         ),
         (r) => jsonDecode(r.body) as Map<String, dynamic>,
       );
+
+  static Future<Map<String, dynamic>> createAlipayPrepayOrder({
+    required String orderId,
+    required double amount,
+    required String description,
+    required String intentId,
+  }) =>
+      _request(
+        () => http.post(
+          Uri.parse(apiUrl('/api/payments/alipay/prepay')),
+          headers: _headers(jsonBody: true),
+          body: jsonEncode({
+            'order_id': orderId,
+            'amount': amount,
+            'description': description,
+            'intent_id': intentId,
+          }),
+        ),
+        (r) => jsonDecode(r.body) as Map<String, dynamic>,
+      );
+
+  static Future<Map<String, dynamic>> fetchPaymentConfig() => _request(
+        () => http.get(
+          Uri.parse(apiUrl('/api/payments/config')),
+          headers: _headers(),
+        ),
+        (r) => jsonDecode(r.body) as Map<String, dynamic>,
+      );
+
+  static Future<Map<String, dynamic>> confirmPayment({
+    required String orderId,
+    required String intentId,
+    required PaymentMethod method,
+    required String providerReference,
+    required double amount,
+  }) =>
+      _request(
+        () => http.post(
+          Uri.parse(apiUrl('/api/payments/confirm')),
+          headers: _headers(jsonBody: true),
+          body: jsonEncode({
+            'order_id': orderId,
+            'intent_id': intentId,
+            'method': _paymentMethodKey(method),
+            'provider_reference': providerReference,
+            'amount': amount,
+          }),
+        ),
+        (r) => jsonDecode(r.body) as Map<String, dynamic>,
+      );
+
+  static String _paymentMethodKey(PaymentMethod method) => switch (method) {
+        PaymentMethod.wechatPay => 'wechat',
+        PaymentMethod.alipay => 'alipay',
+        PaymentMethod.applePay => 'apple_pay',
+        PaymentMethod.creditCard => 'credit_card',
+      };
 
   static Future<List<Map<String, dynamic>>> fetchReservations() => _request(
         () => http.get(
