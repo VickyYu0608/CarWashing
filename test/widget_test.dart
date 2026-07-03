@@ -1,13 +1,18 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/material.dart';
 
+import 'package:car_washing_app/api_client.dart';
 import 'package:car_washing_app/main.dart';
 
 void main() {
-  test('user registers with phone verification and can log in', () {
+  setUp(() {
+    ApiClient.useBackend = false;
+  });
+
+  test('user registers with phone verification and can log in', () async {
     final store = AppStore.seeded();
 
-    final user = store.registerUser(
+    final user = await store.registerUser(
       countryCode: '+86',
       phone: '13900000000',
       verificationCode: '0000',
@@ -17,13 +22,13 @@ void main() {
 
     expect(user.username, '+8613900000000');
     expect(user.approvalStatus, ApprovalStatus.approved);
-    expect(store.login('+8613900000000', '123456'), isTrue);
+    expect(await store.login('+8613900000000', '123456'), isTrue);
   });
 
-  test('shop approval controls whether registered store is visible', () {
+  test('shop approval controls whether registered store is visible', () async {
     final store = AppStore.seeded();
 
-    final shop = store.registerShop(
+    final shop = await store.registerShop(
       countryCode: '+86',
       phone: '13900000001',
       verificationCode: '1111',
@@ -54,7 +59,7 @@ void main() {
     await tester.tap(find.text('登录'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Admin 平台端'), findsOneWidget);
+    expect(find.text('审核中心'), findsOneWidget);
   });
 
   testWidgets('registration pages render from auth page',
@@ -64,7 +69,7 @@ void main() {
     await tester.tap(find.text('用户注册'));
     await tester.pumpAndSettle();
     expect(find.text('用户注册'), findsOneWidget);
-    expect(find.text('验证码（测试填写 0000）'), findsOneWidget);
+    expect(find.text('短信验证码'), findsOneWidget);
 
     await tester.pageBack();
     await tester.pumpAndSettle();
@@ -72,6 +77,6 @@ void main() {
     await tester.tap(find.text('商家注册'));
     await tester.pumpAndSettle();
     expect(find.text('商家注册'), findsOneWidget);
-    expect(find.text('验证码（测试填写 1111）'), findsOneWidget);
+    expect(find.text('短信验证码'), findsOneWidget);
   });
 }
