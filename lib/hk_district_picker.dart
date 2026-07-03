@@ -12,6 +12,7 @@ class HkDistrictPicker extends StatelessWidget {
     required this.onMajorRegionChanged,
     required this.onDistrictChanged,
     required this.onSubAreaChanged,
+    this.onDetailChanged,
     super.key,
   });
 
@@ -22,6 +23,7 @@ class HkDistrictPicker extends StatelessWidget {
   final ValueChanged<HkMajorRegion> onMajorRegionChanged;
   final ValueChanged<HkDistrict> onDistrictChanged;
   final ValueChanged<HkSubArea> onSubAreaChanged;
+  final ValueChanged<String>? onDetailChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -112,6 +114,7 @@ class HkDistrictPicker extends StatelessWidget {
         const SizedBox(height: 12),
         TextField(
           controller: detailController,
+          onChanged: onDetailChanged,
           decoration: const InputDecoration(
             labelText: '详细地址（街道/大厦，选填）',
             border: OutlineInputBorder(),

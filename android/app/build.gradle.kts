@@ -37,8 +37,8 @@ if (googleMapsApiKey.isEmpty()) {
 
 android {
     namespace = "com.example.car_washing_app"
-    compileSdk = flutter.compileSdkVersion
-    ndkVersion = "25.1.8937393"
+    compileSdk = 36
+    ndkVersion = "26.1.10909125"
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -51,7 +51,7 @@ android {
 
     defaultConfig {
         applicationId = "com.example.car_washing_app"
-        minSdk = flutter.minSdkVersion
+        minSdk = maxOf(flutter.minSdkVersion, 23)
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode()
         versionName = flutter.versionName()

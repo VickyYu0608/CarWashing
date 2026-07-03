@@ -96,25 +96,3 @@ class CarWashMapViewState extends State<CarWashMapView> {
     );
   }
 }
-
-class MapSetupHintBanner extends StatelessWidget {
-  const MapSetupHintBanner({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      color: Theme.of(context).colorScheme.errorContainer,
-      child: const Padding(
-        padding: EdgeInsets.all(12),
-        child: Text(
-          '地图未加载？请确认：\n'
-          '1. 已在 android/secrets.properties 填写 google.maps.api.key\n'
-          '2. Google Cloud 已启用 Maps SDK for Android 并开启计费\n'
-          '3. 修改密钥后执行 flutter clean && flutter run\n'
-          '4. 中国大陆需可访问 Google 服务的网络环境',
-          style: TextStyle(fontSize: 12, height: 1.45),
-        ),
-      ),
-    );
-  }
-}
