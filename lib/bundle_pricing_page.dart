@@ -2,6 +2,8 @@ import 'package:car_washing_app/app_theme.dart';
 import 'package:car_washing_app/l10n/locale_controller.dart';
 import 'package:car_washing_app/l10n/localized_catalog.dart';
 import 'package:car_washing_app/main.dart';
+import 'package:car_washing_app/widgets/app_card.dart';
+import 'package:car_washing_app/widgets/ui_motion.dart';
 import 'package:flutter/material.dart';
 
 /// Shared wash-credit bundle pricing editor (single / 10-pack / 20-pack).
@@ -230,88 +232,89 @@ class _BundlePricingPageState extends State<BundlePricingPage> {
               ),
             )
           else
-            for (final plan in s.catalog.bundlePlans(plans))
-              Padding(
-                padding: const EdgeInsets.only(bottom: 10),
-                child: Card(
-                  clipBehavior: Clip.antiAlias,
-                  child: InkWell(
-                    onTap: () => _editPlan(plan),
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Row(
-                        children: [
-                          CircleAvatar(
-                            radius: 26,
-                            backgroundColor: AppColors.primarySurface,
-                            child: Text(
-                              '${plan['wash_count']}',
-                              style: const TextStyle(
-                                color: AppColors.primary,
-                                fontWeight: FontWeight.w800,
-                                fontSize: 16,
-                              ),
+            for (var i = 0; i < plans.length; i++) ...[
+              AppFadeSlideIn(
+                delay: Duration(milliseconds: 50 * i),
+                child: Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: AppCard(
+                    onTap: () => _editPlan(s.catalog.bundlePlans(plans)[i]),
+                    child: Row(
+                      children: [
+                        CircleAvatar(
+                          radius: 26,
+                          backgroundColor: AppColors.primarySurface,
+                          child: Text(
+                            '${plans[i]['wash_count']}',
+                            style: const TextStyle(
+                              color: AppColors.primary,
+                              fontWeight: FontWeight.w800,
+                              fontSize: 16,
                             ),
                           ),
-                          const SizedBox(width: 14),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  plan['name'] as String? ?? '',
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.w800,
-                                    fontSize: 16,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  plan['description'] as String? ?? '',
-                                  style: Theme.of(context)
-                                      .textTheme
-                                      .bodySmall
-                                      ?.copyWith(
-                                        color: AppColors.textSecondary,
-                                      ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.end,
+                        ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                s.priceYuan((plan['price'] as num).toDouble()),
+                                s.catalog.bundlePlans(plans)[i]['name'] as String? ?? '',
                                 style: const TextStyle(
-                                  color: AppColors.primary,
                                   fontWeight: FontWeight.w800,
-                                  fontSize: 18,
+                                  fontSize: 16,
                                 ),
                               ),
                               const SizedBox(height: 4),
                               Text(
-                                s.tapToEditPrice,
+                                s.catalog.bundlePlans(plans)[i]['description'] as String? ?? '',
                                 style: Theme.of(context)
                                     .textTheme
-                                    .labelSmall
-                                    ?.copyWith(color: AppColors.textSecondary),
+                                    .bodySmall
+                                    ?.copyWith(
+                                      color: AppColors.textSecondary,
+                                    ),
                               ),
                             ],
                           ),
-                          const SizedBox(width: 4),
-                          Icon(
-                            Icons.edit_outlined,
-                            size: 18,
-                            color: Theme.of(context).colorScheme.outline,
-                          ),
-                        ],
-                      ),
+                        ),
+                        const SizedBox(width: 8),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            Text(
+                              s.priceYuan(
+                                (s.catalog.bundlePlans(plans)[i]['price'] as num)
+                                    .toDouble(),
+                              ),
+                              style: const TextStyle(
+                                color: AppColors.primary,
+                                fontWeight: FontWeight.w800,
+                                fontSize: 18,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              s.tapToEditPrice,
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .labelSmall
+                                  ?.copyWith(color: AppColors.textSecondary),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(width: 4),
+                        Icon(
+                          Icons.edit_outlined,
+                          size: 18,
+                          color: Theme.of(context).colorScheme.outline,
+                        ),
+                      ],
                     ),
                   ),
                 ),
               ),
+            ],
         ],
       ),
     );

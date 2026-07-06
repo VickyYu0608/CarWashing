@@ -30,6 +30,7 @@ import 'package:car_washing_app/l10n/app_strings.dart';
 import 'package:car_washing_app/l10n/locale_controller.dart';
 import 'package:car_washing_app/l10n/localized_catalog.dart';
 import 'package:car_washing_app/widgets/language_switcher.dart';
+import 'package:car_washing_app/widgets/ui_motion.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:geolocator/geolocator.dart';
@@ -427,10 +428,12 @@ class AppStore extends ChangeNotifier {
         storeFuture,
         ApiClient.fetchOrders(),
         ApiClient.fetchReservations(),
+        ApiClient.fetchBundles(),
       ]);
       final storeJson = results[0];
       final orderJson = results[1];
       final resJson = results[2];
+      final bundleJson = results[3] as List<Map<String, dynamic>>;
 
       stores
         ..clear()
@@ -441,6 +444,7 @@ class AppStore extends ChangeNotifier {
       reservations
         ..clear()
         ..addAll(AppSync.parseReservations(resJson));
+      bundlePlans = bundleJson;
 
       if (account.role == AccountRole.user) {
         final profileResults = await Future.wait([
@@ -702,6 +706,9 @@ class AppStore extends ChangeNotifier {
       return List<Map<String, dynamic>>.from(bundlePlans);
     }
   }
+
+  /// Always refetches bundle pricing from the API (e.g. after shop edits prices).
+  Future<void> refreshBundlePlans() => fetchBundlePlans();
 
   Future<void> updateBundlePlan(
     String planId,
@@ -2077,16 +2084,23 @@ class AuthGate extends StatelessWidget {
       animation: store,
       builder: (context, _) {
         final account = store.currentAccount;
-        if (account == null) {
-          return const AuthPage();
-        }
-        return switch (account.role) {
-          AccountRole.user => const UserShell(),
-          AccountRole.shop => account.approvalStatus == ApprovalStatus.approved
-              ? const ShopShell()
-              : const ShopReviewPage(),
-          AccountRole.admin => const AdminShell(),
-        };
+        return AnimatedSwitcher(
+          duration: const Duration(milliseconds: 320),
+          switchInCurve: Curves.easeOutCubic,
+          switchOutCurve: Curves.easeInCubic,
+          transitionBuilder: appTabTransitionBuilder,
+          child: account == null
+              ? const AuthPage(key: ValueKey('auth'))
+              : switch (account.role) {
+                  AccountRole.user => const UserShell(key: ValueKey('user-shell')),
+                  AccountRole.shop =>
+                    account.approvalStatus == ApprovalStatus.approved
+                        ? const ShopShell(key: ValueKey('shop-shell'))
+                        : const ShopReviewPage(key: ValueKey('shop-review')),
+                  AccountRole.admin =>
+                    const AdminShell(key: ValueKey('admin-shell')),
+                },
+        );
       },
     );
   }
@@ -2151,7 +2165,8 @@ class _AuthPageState extends State<AuthPage> {
                     ),
               ),
               const SizedBox(height: 24),
-              Container(
+              AppFadeSlideIn(
+                child: Container(
                 padding: const EdgeInsets.all(22),
                 decoration: appSurfaceCardDecoration(),
                 child: Column(
@@ -2275,6 +2290,7 @@ class _AuthPageState extends State<AuthPage> {
                     ),
                   ],
                 ),
+              ),
               ),
               const SizedBox(height: 16),
               const DemoCredentialCard(),
@@ -3373,10 +3389,20 @@ class _UserShellState extends State<UserShell> {
         bottom: false,
         child: Padding(
           padding: const EdgeInsets.only(bottom: kUserShellFabClearance),
-          child: pages[index],
+          child: AnimatedSwitcher(
+            duration: const Duration(milliseconds: 240),
+            switchInCurve: Curves.easeOutCubic,
+            switchOutCurve: Curves.easeInCubic,
+            transitionBuilder: appTabTransitionBuilder,
+            child: KeyedSubtree(
+              key: ValueKey<int>(index),
+              child: pages[index],
+            ),
+          ),
         ),
       ),
       floatingActionButton: FloatingActionButton.large(
+        heroTag: 'user-scan-fab',
         onPressed: () async {
           final qr = await Navigator.of(context).push<String>(
             MaterialPageRoute(builder: (_) => const QrScanPage()),
@@ -3409,7 +3435,12 @@ class _UserShellState extends State<UserShell> {
       floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
       bottomNavigationBar: UserDockedBottomNav(
         selectedIndex: index,
-        onDestinationSelected: (value) => setState(() => index = value),
+        onDestinationSelected: (value) {
+          setState(() => index = value);
+          if (value == 1) {
+            unawaited(AppScope.of(context).refreshBundlePlans());
+          }
+        },
         destinations: [
           NavigationDestination(
             icon: const Icon(Icons.local_car_wash_outlined),
@@ -4793,7 +4824,18 @@ class _ShopShellState extends State<ShopShell> {
       const ShopProfilePage(),
     ];
     return Scaffold(
-      body: SafeArea(child: pages[index]),
+      body: SafeArea(
+        child: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 240),
+          switchInCurve: Curves.easeOutCubic,
+          switchOutCurve: Curves.easeInCubic,
+          transitionBuilder: appTabTransitionBuilder,
+          child: KeyedSubtree(
+            key: ValueKey<int>(index),
+            child: pages[index],
+          ),
+        ),
+      ),
       bottomNavigationBar: AppBottomNav(
         selectedIndex: index,
         onDestinationSelected: (value) => setState(() => index = value),
@@ -5034,7 +5076,18 @@ class _AdminShellState extends State<AdminShell> {
       const AdminPricingPage(),
     ];
     return Scaffold(
-      body: SafeArea(child: pages[index]),
+      body: SafeArea(
+        child: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 240),
+          switchInCurve: Curves.easeOutCubic,
+          switchOutCurve: Curves.easeInCubic,
+          transitionBuilder: appTabTransitionBuilder,
+          child: KeyedSubtree(
+            key: ValueKey<int>(index),
+            child: pages[index],
+          ),
+        ),
+      ),
       bottomNavigationBar: AppBottomNav(
         selectedIndex: index,
         onDestinationSelected: (value) {
@@ -5643,7 +5696,22 @@ class TopBar extends StatelessWidget {
       margin: const EdgeInsets.only(bottom: 16),
       padding: const EdgeInsets.fromLTRB(18, 18, 8, 18),
       decoration: appGradientHeaderDecoration(),
-      child: Row(
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Positioned(
+            right: -18,
+            top: -24,
+            child: Container(
+              width: 96,
+              height: 96,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.white.withValues(alpha: 0.08),
+              ),
+            ),
+          ),
+          Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Expanded(
@@ -5674,6 +5742,8 @@ class TopBar extends StatelessWidget {
             icon: const Icon(Icons.logout_rounded, color: Colors.white),
             tooltip: context.s.exitLogin,
           ),
+        ],
+      ),
         ],
       ),
     );
@@ -6600,30 +6670,41 @@ class MetricCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Row(
-          children: [
-            AppIconBadge(icon: icon, size: 48),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    value,
-                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                          fontWeight: FontWeight.w800,
-                          color: AppColors.primaryDark,
-                        ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(label, style: Theme.of(context).textTheme.bodySmall),
-                ],
+    return AppFadeSlideIn(
+      child: Card(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            children: [
+              Container(
+                width: 4,
+                height: 48,
+                decoration: BoxDecoration(
+                  color: AppColors.primary,
+                  borderRadius: BorderRadius.circular(4),
+                ),
               ),
-            ),
-          ],
+              const SizedBox(width: 12),
+              AppIconBadge(icon: icon, size: 48),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      value,
+                      style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                            fontWeight: FontWeight.w800,
+                            color: AppColors.primaryDark,
+                          ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(label, style: Theme.of(context).textTheme.bodySmall),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -6644,23 +6725,32 @@ class EmptyState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
-        child: Column(
-          children: [
-            Container(
-              width: 72,
-              height: 72,
-              decoration: const BoxDecoration(
-                color: AppColors.primarySurface,
-                shape: BoxShape.circle,
+    return AppFadeSlideIn(
+      child: Card(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
+          child: Column(
+            children: [
+              Container(
+                width: 80,
+                height: 80,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      AppColors.primarySurface,
+                      AppColors.primary.withValues(alpha: 0.12),
+                    ],
+                  ),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: AppColors.cardBorder),
+                ),
+                child: Icon(icon, size: 38, color: AppColors.primary),
               ),
-              child: Icon(icon, size: 36, color: AppColors.primary),
-            ),
-            const SizedBox(height: 14),
-            Text(
-              title,
+              const SizedBox(height: 16),
+              Text(
+                title,
               style: Theme.of(context).textTheme.titleMedium?.copyWith(
                     fontWeight: FontWeight.w800,
                     color: AppColors.textPrimary,
@@ -6674,6 +6764,7 @@ class EmptyState extends StatelessWidget {
             ),
           ],
         ),
+      ),
       ),
     );
   }

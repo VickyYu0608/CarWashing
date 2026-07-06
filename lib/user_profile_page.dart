@@ -7,6 +7,7 @@ import 'package:car_washing_app/customer_service_page.dart';
 import 'package:car_washing_app/settings_page.dart';
 import 'package:car_washing_app/share_referral.dart';
 import 'package:car_washing_app/terms_page.dart';
+import 'package:car_washing_app/widgets/ui_motion.dart';
 import 'package:flutter/material.dart';
 
 /// 用户个人中心
@@ -130,18 +131,26 @@ class _ProfileHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    return AppFadeSlideIn(
+      child: Container(
       width: double.infinity,
       margin: const EdgeInsets.only(bottom: 16),
       padding: const EdgeInsets.fromLTRB(20, 28, 20, 24),
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
           colors: [AppColors.primary, AppColors.primaryLight],
         ),
-        borderRadius: BorderRadius.only(
+        borderRadius: const BorderRadius.only(
           bottomLeft: Radius.circular(28),
           bottomRight: Radius.circular(28),
         ),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x331D6FE8),
+            blurRadius: 20,
+            offset: Offset(0, 10),
+          ),
+        ],
       ),
       child: Row(
         children: [
@@ -181,6 +190,7 @@ class _ProfileHeader extends StatelessWidget {
             ),
           ),
         ],
+      ),
       ),
     );
   }

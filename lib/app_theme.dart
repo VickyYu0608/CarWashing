@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'package:car_washing_app/widgets/ui_motion.dart';
+
 /// 清洗到家 · 蓝白品牌色
 class AppColors {
   static const primary = Color(0xFF1D6FE8);
@@ -153,6 +155,15 @@ ThemeData buildAppTheme() {
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       backgroundColor: AppColors.primaryDark,
     ),
+    floatingActionButtonTheme: FloatingActionButtonThemeData(
+      backgroundColor: AppColors.primary,
+      foregroundColor: Colors.white,
+      elevation: 8,
+      highlightElevation: 12,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+    ),
+    splashFactory: InkSparkle.splashFactory,
+    pageTransitionsTheme: buildAppPageTransitionsTheme(),
     textTheme: const TextTheme(
       headlineSmall: TextStyle(
         color: AppColors.textPrimary,
@@ -361,7 +372,7 @@ class UserDockedBottomNav extends StatelessWidget {
   }
 }
 
-class _DockedNavItem extends StatelessWidget {
+class _DockedNavItem extends StatefulWidget {
   const _DockedNavItem({
     required this.destination,
     required this.selected,
@@ -373,30 +384,43 @@ class _DockedNavItem extends StatelessWidget {
   final VoidCallback onTap;
 
   @override
+  State<_DockedNavItem> createState() => _DockedNavItemState();
+}
+
+class _DockedNavItemState extends State<_DockedNavItem> {
+  @override
   Widget build(BuildContext context) {
-    final color = selected ? AppColors.primary : AppColors.textSecondary;
+    final color = widget.selected ? AppColors.primary : AppColors.textSecondary;
     return InkWell(
-      onTap: onTap,
+      onTap: widget.onTap,
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 6),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            IconTheme(
-              data: IconThemeData(color: color, size: 24),
-              child: selected
-                  ? (destination.selectedIcon ?? destination.icon)
-                  : destination.icon,
+            AnimatedScale(
+              scale: widget.selected ? 1.08 : 1,
+              duration: const Duration(milliseconds: 200),
+              curve: Curves.easeOutBack,
+              child: IconTheme(
+                data: IconThemeData(color: color, size: 24),
+                child: widget.selected
+                    ? (widget.destination.selectedIcon ?? widget.destination.icon)
+                    : widget.destination.icon,
+              ),
             ),
             const SizedBox(height: 2),
-            Text(
-              destination.label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
+            AnimatedDefaultTextStyle(
+              duration: const Duration(milliseconds: 200),
               style: TextStyle(
                 color: color,
                 fontSize: 11,
-                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                fontWeight: widget.selected ? FontWeight.w700 : FontWeight.w500,
+              ),
+              child: Text(
+                widget.destination.label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
               ),
             ),
           ],

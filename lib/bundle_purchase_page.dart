@@ -5,6 +5,8 @@ import 'package:car_washing_app/l10n/localized_catalog.dart';
 import 'package:car_washing_app/main.dart';
 import 'package:car_washing_app/payment/payment_models.dart';
 import 'package:car_washing_app/payment/payment_page.dart';
+import 'package:car_washing_app/widgets/app_card.dart';
+import 'package:car_washing_app/widgets/ui_motion.dart';
 import 'package:flutter/material.dart';
 
 /// 购买洗车次卡（单次 ¥50 / 10次 ¥450 / 20次 ¥850）
@@ -18,9 +20,6 @@ class BundlePurchasePage extends StatefulWidget {
 }
 
 class _BundlePurchasePageState extends State<BundlePurchasePage> {
-  List<Map<String, dynamic>> plans = List<Map<String, dynamic>>.from(
-    AppStore.bundlePlanSpecs,
-  );
   bool loading = false;
   String? error;
   String? purchasingPlanId;
@@ -36,7 +35,6 @@ class _BundlePurchasePageState extends State<BundlePurchasePage> {
     final appStore = AppScope.of(context);
     if (!appStore.shouldFetchBundlePlansFromBackend) {
       setState(() {
-        plans = List<Map<String, dynamic>>.from(AppStore.bundlePlanSpecs);
         loading = false;
         error = null;
       });
@@ -48,17 +46,13 @@ class _BundlePurchasePageState extends State<BundlePurchasePage> {
       error = null;
     });
     try {
-      final remotePlans = await appStore.fetchBundlePlans();
+      await appStore.refreshBundlePlans();
       if (!mounted) return;
-      setState(() {
-        plans = remotePlans;
-        loading = false;
-      });
+      setState(() => loading = false);
     } on Object catch (e) {
       if (!mounted) return;
       setState(() {
         error = e.toString();
-        plans = List<Map<String, dynamic>>.from(AppStore.bundlePlanSpecs);
         loading = false;
       });
     }
@@ -135,10 +129,13 @@ class _BundlePurchasePageState extends State<BundlePurchasePage> {
       listenable: Listenable.merge([appStore, localeController]),
       builder: (context, _) {
         final account = appStore.currentAccount;
-        if (loading) {
+        if (loading && appStore.shouldFetchBundlePlansFromBackend) {
           return const Center(child: CircularProgressIndicator());
         }
-        return _buildBody(context, appStore, account);
+        return RefreshIndicator(
+          onRefresh: _load,
+          child: _buildBody(context, appStore, account),
+        );
       },
     );
   }
@@ -149,6 +146,9 @@ class _BundlePurchasePageState extends State<BundlePurchasePage> {
     AppAccount? account,
   ) {
     final s = context.s;
+    final plans = appStore.shouldFetchBundlePlansFromBackend
+        ? appStore.bundlePlans
+        : AppStore.bundlePlanSpecs;
     final prepaidCredits = account?.prepaidWashCredits ?? 0;
     final freeCredits = account?.freeWashCredits ?? 0;
     final usageOrders = appStore.orders
@@ -164,6 +164,7 @@ class _BundlePurchasePageState extends State<BundlePurchasePage> {
 
     return ListView(
       padding: const EdgeInsets.all(16),
+      physics: const AlwaysScrollableScrollPhysics(),
       children: [
         if (widget.embedded)
           SectionTitle(
@@ -173,6 +174,11 @@ class _BundlePurchasePageState extends State<BundlePurchasePage> {
         if (widget.embedded) const SizedBox(height: 12),
         Card(
           color: AppColors.primarySurface,
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: const BorderSide(color: AppColors.cardBorder),
+          ),
           child: Padding(
             padding: const EdgeInsets.all(16),
             child: Row(
@@ -217,11 +223,14 @@ class _BundlePurchasePageState extends State<BundlePurchasePage> {
             padding: const EdgeInsets.only(bottom: 8),
             child: Text(error!, style: const TextStyle(color: Colors.red)),
           ),
-        for (final plan in context.s.catalog.bundlePlans(plans)) ...[
-          _BundlePlanCard(
-            plan: plan,
-            purchasing: purchasingPlanId == plan['id'],
-            onPurchase: () => _purchase(plan),
+        for (var i = 0; i < plans.length; i++) ...[
+          AppFadeSlideIn(
+            delay: Duration(milliseconds: 60 * i),
+            child: _BundlePlanCard(
+              plan: context.s.catalog.bundlePlans(plans)[i],
+              purchasing: purchasingPlanId == plans[i]['id'],
+              onPurchase: () => _purchase(context.s.catalog.bundlePlans(plans)[i]),
+            ),
           ),
           const SizedBox(height: 8),
         ],
@@ -296,10 +305,9 @@ class _BundlePlanCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final s = context.s;
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
+    return AppCard(
+      onTap: purchasing ? null : onPurchase,
+      child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
@@ -353,7 +361,6 @@ class _BundlePlanCard extends StatelessWidget {
             ),
           ],
         ),
-      ),
     );
   }
 }
