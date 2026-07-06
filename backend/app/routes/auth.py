@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 import bcrypt
 from fastapi import APIRouter, Depends, HTTPException
+from app.auth_deps import get_current_account, get_token_payload
 from jose import jwt
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import select
@@ -240,16 +241,35 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
 
 
 @router.get("/me")
-def me(db: Session = Depends(get_db)):
-    # Demo fallback until Authorization middleware is added.
+def me(
+    payload: dict = Depends(get_token_payload),
+    db: Session = Depends(get_db),
+):
+    username = payload.get("sub")
+    if not username:
+        raise HTTPException(status_code=401, detail="Invalid token subject")
+
     account = db.scalar(
-        select(AccountRecord).where(AccountRecord.role == "user").order_by(AccountRecord.created_at.desc())
+        select(AccountRecord).where(AccountRecord.username == username)
     )
     if account is not None:
         return _account_to_json(account)
+
+    demo = DEMO_USERS.get(username)
+    if demo is None:
+        raise HTTPException(status_code=404, detail="Account not found")
+
     return {
-        "username": "user",
-        "display_name": "Demo user",
-        "role": "user",
+        "id": f"demo-{username}",
+        "username": username,
+        "email": f"{username}@demo.local",
+        "country_code": "+86",
+        "phone": "",
+        "role": demo["role"],
+        "display_name": demo["display_name"],
         "approval_status": "approved",
+        "shop_address": "",
+        "shop_latitude": None,
+        "shop_longitude": None,
+        "share_code": "",
     }

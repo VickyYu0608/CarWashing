@@ -2,8 +2,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import init_db
+from app.routes.app_api import router as app_api_router
 from app.routes.auth import router as auth_router
 from app.routes.payments import router as payments_router
+from app.seed_data import ensure_demo_data
+from app.database import SessionLocal
 
 app = FastAPI(title="Car Washing API", version="1.0.0")
 
@@ -19,6 +22,11 @@ app.add_middleware(
 @app.on_event("startup")
 def on_startup() -> None:
     init_db()
+    db = SessionLocal()
+    try:
+        ensure_demo_data(db)
+    finally:
+        db.close()
 
 
 @app.get("/health")
@@ -28,3 +36,4 @@ def health():
 
 app.include_router(auth_router)
 app.include_router(payments_router)
+app.include_router(app_api_router)
