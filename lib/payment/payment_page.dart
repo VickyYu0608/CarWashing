@@ -6,8 +6,6 @@ import 'package:car_washing_app/l10n/locale_controller.dart';
 import 'package:car_washing_app/payment/api_payment_gateway.dart';
 import 'package:car_washing_app/payment/payment_coordinator.dart';
 import 'package:car_washing_app/payment/payment_models.dart';
-import 'package:car_washing_app/payment/payment_provider_page.dart';
-import 'package:car_washing_app/payment/payment_receipt_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -191,79 +189,25 @@ class _PaymentPageState extends State<PaymentPage> {
       return;
     }
 
-    setState(() => _phase = PaymentPhase.processing);
-
+    // Payment integration is still in development — treat checkout as successful
+    // after the user confirms amount and method.
+    setState(() => _phase = PaymentPhase.verifying);
     try {
-      final intent = await _coordinator.prepareIntent(_selectedMethod!);
-      if (!mounted) {
-        return;
-      }
-
-      setState(() => _phase = PaymentPhase.authorizing);
-
-      final authorization = await Navigator.of(context).push<ProviderAuthorizationResult>(
-        MaterialPageRoute(
-          builder: (_) => PaymentProviderPage(
-            request: ProviderAuthorizationRequest(
-              session: _coordinator.activeSession!,
-              intent: intent,
-              card: card,
-            ),
-          ),
-        ),
-      );
-
-      if (!mounted) {
-        return;
-      }
-
-      if (authorization == null || authorization.userCancelled) {
-        setState(() {
-          _phase = PaymentPhase.cancelled;
-          _errorMessage = context.s.paymentCancelledByUser;
-        });
-        return;
-      }
-
-      setState(() => _phase = PaymentPhase.verifying);
-
-      final receipt = await _coordinator.executeCheckout(
-        intent: intent,
-        authorization: authorization,
-        card: card,
-      );
-
-      if (!mounted || receipt == null) {
-        return;
-      }
-
+      final bypassRef =
+          'demo_bypass_${_selectedMethod!.name}_${DateTime.now().millisecondsSinceEpoch}';
       await checkout.onPaymentConfirmed(
-        transactionId: receipt.transactionId,
-        method: receipt.method,
-        providerReference: receipt.providerReference,
+        transactionId: bypassRef,
+        method: _selectedMethod!,
+        providerReference: bypassRef,
       );
-
       if (!mounted) {
         return;
       }
-
-      final finished = await Navigator.of(context).push<bool>(
-        MaterialPageRoute(
-          builder: (_) => PaymentReceiptPage(receipt: receipt),
-        ),
-      );
-
-      if (!mounted) {
-        return;
-      }
-
-      if (finished == true) {
-        Navigator.of(context).pop(true);
-      }
-    } on StateError catch (error) {
+      Navigator.of(context).pop(true);
+    } on Object catch (error) {
       setState(() {
         _phase = PaymentPhase.failed;
-        _errorMessage = error.message;
+        _errorMessage = error.toString();
       });
     }
   }

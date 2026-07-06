@@ -12,6 +12,7 @@ from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.account_json import account_to_json, referred_user_id_list, set_referred_user_ids
 from app.config import get_settings
 from app.database import AccountRecord, StoreRecord, get_db
 from app.services.email_service import send_verification_email
@@ -81,20 +82,11 @@ def _create_token(username: str, role: str) -> str:
 
 
 def _account_to_json(account: AccountRecord) -> dict:
-    return {
-        "id": account.id,
-        "username": account.username,
-        "email": account.email,
-        "country_code": account.country_code,
-        "phone": account.phone,
-        "role": account.role,
-        "display_name": account.display_name,
-        "approval_status": account.approval_status,
-        "shop_address": account.shop_address,
-        "shop_latitude": account.shop_latitude,
-        "shop_longitude": account.shop_longitude,
-        "share_code": account.share_code,
-    }
+    return account_to_json(account)
+
+
+class RedeemReferralRequest(BaseModel):
+    code: str
 
 
 @router.post("/email/send")
@@ -162,6 +154,12 @@ def register_user(body: RegisterUserRequest, db: Session = Depends(get_db)):
         share_code=secrets.token_hex(4).upper(),
     )
     db.add(account)
+    db.flush()
+    if body.referral_code.strip():
+        try:
+            _apply_referral(db, account, body.referral_code)
+        except HTTPException:
+            pass
     db.commit()
     db.refresh(account)
 
@@ -238,6 +236,55 @@ def login(body: LoginRequest, db: Session = Depends(get_db)):
 
     token = _create_token(username, demo["role"])
     return {"access_token": token, "token_type": "bearer"}
+
+
+def _find_account_by_share_code(db: Session, code: str) -> AccountRecord | None:
+    normalized = code.strip().upper()
+    if not normalized:
+        return None
+    return db.scalar(
+        select(AccountRecord).where(AccountRecord.share_code == normalized)
+    )
+
+
+def _apply_referral(
+    db: Session, redeemer: AccountRecord, code: str
+) -> AccountRecord:
+    if redeemer.referred_by_user_id:
+        raise HTTPException(status_code=400, detail="Referral code already used")
+    referrer = _find_account_by_share_code(db, code)
+    if referrer is None:
+        raise HTTPException(status_code=400, detail="Invalid referral code")
+    if referrer.id == redeemer.id:
+        raise HTTPException(status_code=400, detail="Cannot use your own referral code")
+
+    redeemer.referred_by_user_id = referrer.id
+    redeemer.free_wash_credits += 1
+    referrer.free_wash_credits += 1
+    referred = referred_user_id_list(referrer)
+    if redeemer.id not in referred:
+        referred.append(redeemer.id)
+    set_referred_user_ids(referrer, referred)
+    db.flush()
+    return referrer
+
+
+@router.post("/referral/redeem")
+def redeem_referral(
+    body: RedeemReferralRequest,
+    db: Session = Depends(get_db),
+    account: AccountRecord = Depends(get_current_account),
+):
+    if account.role != "user":
+        raise HTTPException(status_code=400, detail="Only users can redeem referral codes")
+    referrer = _apply_referral(db, account, body.code)
+    db.commit()
+    db.refresh(account)
+    db.refresh(referrer)
+    payload = _account_to_json(account)
+    payload["referrer_free_wash_credits"] = referrer.free_wash_credits
+    payload["referrer_id"] = referrer.id
+    return payload
 
 
 @router.get("/me")

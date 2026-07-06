@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from enum import Enum
 
-from sqlalchemy import Boolean, DateTime, Float, String, Text, create_engine
+from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, create_engine, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 from app.config import get_settings
@@ -70,6 +70,11 @@ class AccountRecord(Base):
     shop_latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     shop_longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     share_code: Mapped[str] = mapped_column(String(32), default="")
+    free_wash_credits: Mapped[int] = mapped_column(Integer, default=0)
+    prepaid_wash_credits: Mapped[int] = mapped_column(Integer, default=0)
+    referred_by_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    referred_user_ids: Mapped[str] = mapped_column(Text, default="")
+    auto_use_free_wash: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -104,6 +109,25 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 def init_db() -> None:
     Base.metadata.create_all(bind=engine)
+    _migrate_account_columns()
+
+
+def _migrate_account_columns() -> None:
+    columns = {
+        "free_wash_credits": "INTEGER DEFAULT 0",
+        "prepaid_wash_credits": "INTEGER DEFAULT 0",
+        "referred_by_user_id": "VARCHAR(64)",
+        "referred_user_ids": "TEXT DEFAULT ''",
+        "auto_use_free_wash": "BOOLEAN DEFAULT 1",
+    }
+    with engine.begin() as conn:
+        existing = {
+            row[1]
+            for row in conn.execute(text("PRAGMA table_info(accounts)")).fetchall()
+        }
+        for name, ddl in columns.items():
+            if name not in existing:
+                conn.execute(text(f"ALTER TABLE accounts ADD COLUMN {name} {ddl}"))
 
 
 def get_db():

@@ -23,6 +23,7 @@ import 'package:car_washing_app/user_profile_page.dart';
 import 'package:car_washing_app/qr_scan_page.dart';
 import 'package:car_washing_app/admin_approval_page.dart';
 import 'package:car_washing_app/admin_pricing_page.dart';
+import 'package:car_washing_app/shop_pricing_page.dart';
 import 'package:car_washing_app/bundle_purchase_page.dart';
 import 'package:car_washing_app/l10n/app_locale.dart';
 import 'package:car_washing_app/l10n/app_strings.dart';
@@ -328,6 +329,8 @@ class AppStore extends ChangeNotifier {
   final Map<String, List<UserAddress>> userAddresses;
   final Map<String, double> shopWalletBalances;
   final List<WalletTransaction> walletTransactions;
+  List<Map<String, dynamic>> bundlePlans =
+      List<Map<String, dynamic>>.from(bundlePlanSpecs);
   AppAccount? currentAccount;
   String? lastReservationPhone;
   String? lastAuthMessage;
@@ -654,7 +657,7 @@ class AppStore extends ChangeNotifier {
     if (account == null || account.role != AccountRole.user) {
       throw StateError(AppStrings.current.errLoginAsUser);
     }
-    final plan = defaultBundlePlans.cast<Map<String, dynamic>>().firstWhere(
+    final plan = bundlePlans.cast<Map<String, dynamic>>().firstWhere(
           (candidate) => candidate['id'] == planId,
           orElse: () => throw StateError(AppStrings.current.errPackageNotFound),
         );
@@ -688,13 +691,45 @@ class AppStore extends ChangeNotifier {
 
   Future<List<Map<String, dynamic>>> fetchBundlePlans() async {
     if (!shouldFetchBundlePlansFromBackend) {
-      return defaultBundlePlans;
+      return List<Map<String, dynamic>>.from(bundlePlans);
     }
     try {
-      return await ApiClient.fetchBundles();
+      final remote = await ApiClient.fetchBundles();
+      bundlePlans = remote;
+      notifyListeners();
+      return remote;
     } on Object {
-      return defaultBundlePlans;
+      return List<Map<String, dynamic>>.from(bundlePlans);
     }
+  }
+
+  Future<void> updateBundlePlan(
+    String planId,
+    Map<String, dynamic> body,
+  ) async {
+    if (_shouldUseBackendApi() && ApiClient.accessToken != null) {
+      final updated = await ApiClient.updateBundlePlan(planId, body);
+      final idx = bundlePlans.indexWhere((plan) => plan['id'] == planId);
+      if (idx >= 0) {
+        bundlePlans[idx] = {...bundlePlans[idx], ...updated};
+      } else {
+        bundlePlans.add(updated);
+      }
+      notifyListeners();
+      return;
+    }
+    final idx = bundlePlans.indexWhere((plan) => plan['id'] == planId);
+    if (idx < 0) {
+      throw StateError(AppStrings.current.errPackageNotFound);
+    }
+    final current = Map<String, dynamic>.from(bundlePlans[idx]);
+    if (body['price'] != null) current['price'] = body['price'];
+    if (body['wash_count'] != null) {
+      current['wash_count'] = body['wash_count'];
+    }
+    if (body['name'] != null) current['name'] = body['name'];
+    bundlePlans[idx] = current;
+    notifyListeners();
   }
 
   bool get shouldFetchBundlePlansFromBackend =>
@@ -1207,6 +1242,23 @@ class AppStore extends ChangeNotifier {
     if (_shouldUseBackendApi() && ApiClient.accessToken != null) {
       final data = await ApiClient.redeemReferral(code);
       _applyApiAccount(forAccount, data);
+      final referrerId = data['referrer_id'] as String?;
+      if (referrerId != null) {
+        final referrerCredits = data['referrer_free_wash_credits'] as int?;
+        for (final account in accounts) {
+          if (account.id == referrerId) {
+            if (referrerCredits != null) {
+              account.freeWashCredits = referrerCredits;
+            } else {
+              account.freeWashCredits += 1;
+            }
+            if (!account.referredUserIds.contains(forAccount.id)) {
+              account.referredUserIds.add(forAccount.id);
+            }
+            break;
+          }
+        }
+      }
       notifyListeners();
       return;
     }
@@ -3865,14 +3917,6 @@ class _UserHomePageState extends State<UserHomePage> {
           const SizedBox(height: 8),
           const LinearProgressIndicator(),
         ],
-        if (store.currentAccount?.role == AccountRole.user) ...[
-          const SizedBox(height: 12),
-          ShareReferralPanel(
-            shareCode: store.currentAccount!.shareCode,
-            canShare: store.canShareReferral(store.currentAccount!),
-            freeWashCredits: store.currentAccount!.freeWashCredits,
-          ),
-        ],
         if (selectedStore != null) ...[
           const SizedBox(height: 8),
           NavigationPanel(
@@ -4745,6 +4789,7 @@ class _ShopShellState extends State<ShopShell> {
     final pages = [
       const ShopStoresPage(),
       const ShopReservationsPage(),
+      const ShopPricingPage(),
       const ShopProfilePage(),
     ];
     return Scaffold(
@@ -4762,6 +4807,11 @@ class _ShopShellState extends State<ShopShell> {
             icon: const Icon(Icons.calendar_month_outlined),
             selectedIcon: const Icon(Icons.calendar_month),
             label: context.s.tabReservations,
+          ),
+          NavigationDestination(
+            icon: const Icon(Icons.price_change_outlined),
+            selectedIcon: const Icon(Icons.price_change),
+            label: context.s.tabPricing,
           ),
           NavigationDestination(
             icon: const Icon(Icons.person_outline),

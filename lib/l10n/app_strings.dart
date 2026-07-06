@@ -622,6 +622,13 @@ class AppStrings {
   String get bundlePricingUpdated => t('bundlePricingUpdated');
   String get platformPricing => t('platformPricing');
   String get platformPricingDesc => t('platformPricingDesc');
+  String get shopPricingTitle => t('shopPricingTitle');
+  String get shopPricingDesc => t('shopPricingDesc');
+  String get storeWashPackagePricing => t('storeWashPackagePricing');
+  String get storeWashPackagePricingHint => t('storeWashPackagePricingHint');
+  String get washCreditBundlesSection => t('washCreditBundlesSection');
+  String get washCreditBundlesSectionHint => t('washCreditBundlesSectionHint');
+  String get tapToEditPrice => t('tapToEditPrice');
   String get priceFormatInvalid => t('priceFormatInvalid');
   String get countFormatInvalid => t('countFormatInvalid');
 
@@ -1890,6 +1897,16 @@ class AppStrings {
       'platformPricing': 'Platform pricing',
       'platformPricingDesc':
           'Manage user wash credit packages. Per-store single-wash prices are set in the merchant portal.',
+      'shopPricingTitle': 'Pricing',
+      'shopPricingDesc':
+          'Set wash counts and prices for credit packages users buy on the Packages tab.',
+      'storeWashPackagePricing': 'In-store wash packages',
+      'storeWashPackagePricingHint':
+          'Quick / standard / premium prices are edited on each store card under the Stores tab.',
+      'washCreditBundlesSection': 'Wash credit packages',
+      'washCreditBundlesSectionHint':
+          'Tap a row to edit name, wash count, and price.',
+      'tapToEditPrice': 'Tap to edit',
       'priceFormatInvalid': 'Invalid price format',
       'countFormatInvalid': 'Invalid wash count',
       'imageLoadFailed': 'Image failed to load\nCheck upload and backend',
@@ -2478,6 +2495,13 @@ class AppStrings {
       'bundlePricingUpdated': '次卡定价已更新',
       'platformPricing': '平台定价',
       'platformPricingDesc': '管理用户洗车次卡套餐。门店单次洗车价格在商家端各店铺内修改。',
+      'shopPricingTitle': '定价管理',
+      'shopPricingDesc': '设置用户在「套餐」页购买的洗车次卡次数与售价。',
+      'storeWashPackagePricing': '门店单次洗车套餐',
+      'storeWashPackagePricingHint': '快速冲洗、标准自助、精洗等价格在「门店」页各店铺卡片内修改。',
+      'washCreditBundlesSection': '洗车次卡套餐',
+      'washCreditBundlesSectionHint': '点击套餐可修改名称、次数与售价。',
+      'tapToEditPrice': '点击修改',
       'priceFormatInvalid': '价格格式不正确',
       'countFormatInvalid': '次数格式不正确',
       'imageLoadFailed': '图片加载失败\n请确认文件已上传且后端正在运行',
@@ -3063,6 +3087,13 @@ class AppStrings {
       'bundlePricingUpdated': '次卡定價已更新',
       'platformPricing': '平台定價',
       'platformPricingDesc': '管理用戶洗車次卡套餐。門店單次洗車價格在商家端各店鋪內修改。',
+      'shopPricingTitle': '定價管理',
+      'shopPricingDesc': '設定用戶在「套餐」頁購買的洗車次卡次數與售價。',
+      'storeWashPackagePricing': '門店單次洗車套餐',
+      'storeWashPackagePricingHint': '快速沖洗、標準自助、精洗等價格在「門店」頁各店鋪卡片內修改。',
+      'washCreditBundlesSection': '洗車次卡套餐',
+      'washCreditBundlesSectionHint': '點擊套餐可修改名稱、次數與售價。',
+      'tapToEditPrice': '點擊修改',
       'priceFormatInvalid': '價格格式不正確',
       'countFormatInvalid': '次數格式不正確',
       'imageLoadFailed': '圖片載入失敗\n請確認檔案已上傳且後端正在運行',

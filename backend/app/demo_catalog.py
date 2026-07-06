@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from app.database import StoreRecord
+from app.package_store import get_store_overrides
 
 DEFAULT_PACKAGES = [
     {
@@ -28,11 +29,14 @@ DEFAULT_PACKAGES = [
     },
 ]
 
-BUNDLE_PLANS = [
+BUNDLE_PLAN_DEFAULTS = [
     {"id": "single", "wash_count": 1, "price": 50.0},
     {"id": "pack10", "wash_count": 10, "price": 450.0},
     {"id": "pack20", "wash_count": 20, "price": 850.0},
 ]
+
+# Backwards-compatible alias used by purchase logic.
+BUNDLE_PLANS = BUNDLE_PLAN_DEFAULTS
 
 _DEVICE_PRESETS: dict[str, list[dict]] = {
     "store-1": [
@@ -124,6 +128,18 @@ def _devices_for_store(store: StoreRecord) -> list[dict]:
     ]
 
 
+def _packages_for_store(store: StoreRecord) -> list[dict]:
+    overrides = get_store_overrides(store.id)
+    packages: list[dict] = []
+    for pkg in DEFAULT_PACKAGES:
+        merged = dict(pkg)
+        override = overrides.get(pkg["id"])
+        if override:
+            merged.update(override)
+        packages.append(merged)
+    return packages
+
+
 def store_to_json(store: StoreRecord) -> dict:
     service_types = [
         item.strip()
@@ -144,7 +160,7 @@ def store_to_json(store: StoreRecord) -> dict:
         "tags": meta["tags"],
         "service_types": service_types,
         "devices": _devices_for_store(store),
-        "packages": DEFAULT_PACKAGES,
+        "packages": _packages_for_store(store),
         "approval_status": store.approval_status,
         "admin_reply": "",
     }
