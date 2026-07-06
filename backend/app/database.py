@@ -1,7 +1,17 @@
+from __future__ import annotations
+
 from datetime import datetime, timezone
 from enum import Enum
 
-from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, create_engine, text
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Float,
+    Integer,
+    String,
+    Text,
+    create_engine,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 from app.config import get_settings
@@ -93,6 +103,135 @@ class StoreRecord(Base):
     approval_status: Mapped[str] = mapped_column(String(32), default="pending")
     service_types: Mapped[str] = mapped_column(Text, default="")
     license_files: Mapped[str] = mapped_column(Text, default="")
+    rating: Mapped[float] = mapped_column(Float, default=5.0)
+    tags: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+
+class StoreDeviceRecord(Base):
+    __tablename__ = "store_devices"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    store_id: Mapped[str] = mapped_column(String(64), index=True)
+    qr_code: Mapped[str] = mapped_column(String(64), default="")
+    bay_name: Mapped[str] = mapped_column(String(128), default="")
+    status: Mapped[str] = mapped_column(String(32), default="idle")
+    last_heartbeat: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    total_use_seconds: Mapped[int] = mapped_column(Integer, default=0)
+    use_count: Mapped[int] = mapped_column(Integer, default=0)
+    fault_count: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class StorePackageOverrideRecord(Base):
+    __tablename__ = "store_package_overrides"
+
+    store_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    package_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    price: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
+class BundlePlanOverrideRecord(Base):
+    __tablename__ = "bundle_plan_overrides"
+
+    plan_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    wash_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    price: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
+class OrderRecord(Base):
+    __tablename__ = "orders"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_account_id: Mapped[str] = mapped_column(String(64), index=True)
+    store_id: Mapped[str] = mapped_column(String(64), index=True)
+    device_id: Mapped[str] = mapped_column(String(64), default="")
+    package_id: Mapped[str] = mapped_column(String(64), default="")
+    status: Mapped[str] = mapped_column(String(32), default="created", index=True)
+    amount: Mapped[float] = mapped_column(Float, default=0.0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    remaining_seconds: Mapped[int] = mapped_column(Integer, default=0)
+    failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    used_free_wash_credit: Mapped[bool] = mapped_column(Boolean, default=False)
+    payment_transaction_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    payment_method: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    provider_reference: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ReservationRecord(Base):
+    __tablename__ = "reservations"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_account_id: Mapped[str] = mapped_column(String(64), index=True)
+    store_id: Mapped[str] = mapped_column(String(64), index=True)
+    service_type: Mapped[str] = mapped_column(String(32), default="self_service")
+    user_latitude: Mapped[float] = mapped_column(Float, default=0.0)
+    user_longitude: Mapped[float] = mapped_column(Float, default=0.0)
+    distance_km: Mapped[float] = mapped_column(Float, default=0.0)
+    eta_minutes: Mapped[int] = mapped_column(Integer, default=0)
+    arrival_time: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    contact_phone: Mapped[str] = mapped_column(String(32), default="")
+    note: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+
+class VehicleRecord(Base):
+    __tablename__ = "vehicles"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_account_id: Mapped[str] = mapped_column(String(64), index=True)
+    plate: Mapped[str] = mapped_column(String(32), default="")
+    model: Mapped[str] = mapped_column(String(128), default="")
+    color: Mapped[str] = mapped_column(String(64), default="")
+
+
+class AddressRecord(Base):
+    __tablename__ = "addresses"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_account_id: Mapped[str] = mapped_column(String(64), index=True)
+    label: Mapped[str] = mapped_column(String(64), default="")
+    address: Mapped[str] = mapped_column(Text, default="")
+    latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
+class WalletBalanceRecord(Base):
+    __tablename__ = "wallet_balances"
+
+    account_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    balance: Mapped[float] = mapped_column(Float, default=0.0)
+
+
+class WalletTransactionRecord(Base):
+    __tablename__ = "wallet_transactions"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    account_id: Mapped[str] = mapped_column(String(64), index=True)
+    title: Mapped[str] = mapped_column(String(256), default="")
+    amount: Mapped[float] = mapped_column(Float, default=0.0)
+    order_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -101,33 +240,17 @@ class StoreRecord(Base):
 
 settings = get_settings()
 engine = create_engine(
-    "sqlite:///./car_washing.db",
-    connect_args={"check_same_thread": False},
+    settings.sqlalchemy_database_url,
+    pool_pre_ping=True,
+    pool_recycle=3600,
 )
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
 def init_db() -> None:
-    Base.metadata.create_all(bind=engine)
-    _migrate_account_columns()
+    from app.db_bootstrap import bootstrap_database
 
-
-def _migrate_account_columns() -> None:
-    columns = {
-        "free_wash_credits": "INTEGER DEFAULT 0",
-        "prepaid_wash_credits": "INTEGER DEFAULT 0",
-        "referred_by_user_id": "VARCHAR(64)",
-        "referred_user_ids": "TEXT DEFAULT ''",
-        "auto_use_free_wash": "BOOLEAN DEFAULT 1",
-    }
-    with engine.begin() as conn:
-        existing = {
-            row[1]
-            for row in conn.execute(text("PRAGMA table_info(accounts)")).fetchall()
-        }
-        for name, ddl in columns.items():
-            if name not in existing:
-                conn.execute(text(f"ALTER TABLE accounts ADD COLUMN {name} {ddl}"))
+    bootstrap_database(engine)
 
 
 def get_db():

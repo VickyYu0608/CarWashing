@@ -7,10 +7,27 @@ from sqlalchemy.orm import Session
 
 from app.auth_deps import get_current_account
 from app.bundle_store import list_bundle_plans, update_bundle_plan as persist_bundle_plan
-from app.database import AccountRecord, StoreRecord, get_db
+from app.database import (
+    AccountRecord,
+    AddressRecord,
+    OrderRecord,
+    ReservationRecord,
+    StoreRecord,
+    VehicleRecord,
+    WalletBalanceRecord,
+    WalletTransactionRecord,
+    get_db,
+)
 from app.demo_catalog import store_to_json
 from app.package_store import update_package
 from app.seed_data import ensure_store_for_shop_account
+from app.serializers import (
+    address_to_json,
+    order_to_json,
+    reservation_to_json,
+    vehicle_to_json,
+    wallet_to_json,
+)
 
 router = APIRouter(tags=["app"])
 
@@ -31,8 +48,8 @@ class UpdateBundlePlanRequest(BaseModel):
     name: str | None = None
 
 
-def _bundle_plan(plan_id: str) -> dict:
-    for plan in list_bundle_plans():
+def _bundle_plan(db: Session, plan_id: str) -> dict:
+    for plan in list_bundle_plans(db):
         if plan["id"] == plan_id:
             return plan
     raise HTTPException(status_code=404, detail="Package not found")
@@ -57,7 +74,7 @@ def list_stores(
         .where(StoreRecord.approval_status == "approved")
         .order_by(StoreRecord.created_at.desc())
     ).all()
-    return [store_to_json(store) for store in rows]
+    return [store_to_json(store, db) for store in rows]
 
 
 @router.get("/api/stores/mine")
@@ -71,61 +88,125 @@ def list_my_stores(
         .where(StoreRecord.owner_account_id == account.id)
         .order_by(StoreRecord.created_at.desc())
     ).all()
-    return [store_to_json(store) for store in rows]
+    return [store_to_json(store, db) for store in rows]
 
 
 @router.get("/api/orders")
 def list_orders(
+    db: Session = Depends(get_db),
     account: AccountRecord = Depends(get_current_account),
 ) -> list[dict]:
-    return []
+    if account.role == "user":
+        rows = db.scalars(
+            select(OrderRecord)
+            .where(OrderRecord.user_account_id == account.id)
+            .order_by(OrderRecord.created_at.desc())
+        ).all()
+    elif account.role == "shop":
+        store_ids = db.scalars(
+            select(StoreRecord.id).where(StoreRecord.owner_account_id == account.id)
+        ).all()
+        if not store_ids:
+            return []
+        rows = db.scalars(
+            select(OrderRecord)
+            .where(OrderRecord.store_id.in_(store_ids))
+            .order_by(OrderRecord.created_at.desc())
+        ).all()
+    else:
+        rows = db.scalars(select(OrderRecord).order_by(OrderRecord.created_at.desc())).all()
+    return [order_to_json(order) for order in rows]
 
 
 @router.get("/api/reservations")
 def list_reservations(
+    db: Session = Depends(get_db),
     account: AccountRecord = Depends(get_current_account),
 ) -> list[dict]:
-    return []
+    if account.role == "user":
+        rows = db.scalars(
+            select(ReservationRecord)
+            .where(ReservationRecord.user_account_id == account.id)
+            .order_by(ReservationRecord.created_at.desc())
+        ).all()
+    elif account.role == "shop":
+        store_ids = db.scalars(
+            select(StoreRecord.id).where(StoreRecord.owner_account_id == account.id)
+        ).all()
+        if not store_ids:
+            return []
+        rows = db.scalars(
+            select(ReservationRecord)
+            .where(ReservationRecord.store_id.in_(store_ids))
+            .order_by(ReservationRecord.created_at.desc())
+        ).all()
+    else:
+        rows = db.scalars(
+            select(ReservationRecord).order_by(ReservationRecord.created_at.desc())
+        ).all()
+    return [reservation_to_json(item) for item in rows]
 
 
 @router.get("/api/vehicles")
 def list_vehicles(
+    db: Session = Depends(get_db),
     account: AccountRecord = Depends(get_current_account),
 ) -> list[dict]:
-    return []
+    rows = db.scalars(
+        select(VehicleRecord)
+        .where(VehicleRecord.user_account_id == account.id)
+        .order_by(VehicleRecord.plate.asc())
+    ).all()
+    return [vehicle_to_json(item) for item in rows]
 
 
 @router.get("/api/addresses")
 def list_addresses(
+    db: Session = Depends(get_db),
     account: AccountRecord = Depends(get_current_account),
 ) -> list[dict]:
-    return []
+    rows = db.scalars(
+        select(AddressRecord)
+        .where(AddressRecord.user_account_id == account.id)
+        .order_by(AddressRecord.label.asc())
+    ).all()
+    return [address_to_json(item) for item in rows]
 
 
 @router.get("/api/wallet")
 def get_wallet(
+    db: Session = Depends(get_db),
     account: AccountRecord = Depends(get_current_account),
 ) -> dict:
-    return {"balance": 0.0, "transactions": []}
+    balance = db.get(WalletBalanceRecord, account.id)
+    transactions = db.scalars(
+        select(WalletTransactionRecord)
+        .where(WalletTransactionRecord.account_id == account.id)
+        .order_by(WalletTransactionRecord.created_at.desc())
+    ).all()
+    return wallet_to_json(balance, list(transactions))
 
 
 @router.get("/api/bundles")
 def list_bundles(
+    db: Session = Depends(get_db),
     account: AccountRecord = Depends(get_current_account),
 ) -> list[dict]:
-    return list_bundle_plans()
+    return list_bundle_plans(db)
 
 
 @router.patch("/api/bundles/{plan_id}")
 def patch_bundle_plan(
     plan_id: str,
     body: UpdateBundlePlanRequest,
+    db: Session = Depends(get_db),
     account: AccountRecord = Depends(get_current_account),
 ) -> dict:
     if account.role not in {"shop", "admin"}:
         raise HTTPException(status_code=403, detail="Shop or admin access required")
     try:
         return persist_bundle_plan(
+            db,
             plan_id=plan_id,
             price=body.price,
             wash_count=body.wash_count,
@@ -143,7 +224,7 @@ def purchase_bundle(
 ) -> dict:
     if account.role != "user":
         raise HTTPException(status_code=400, detail="Only users can purchase bundles")
-    plan = _bundle_plan(body.plan_id.strip())
+    plan = _bundle_plan(db, body.plan_id.strip())
     wash_count = int(plan["wash_count"])
     account.prepaid_wash_credits += wash_count
     db.commit()
@@ -167,13 +248,14 @@ def patch_store_package(
         raise HTTPException(status_code=403, detail="Shop access required")
     store = _store_for_owner(db, store_id, account)
     update_package(
+        db,
         store_id=store_id,
         package_id=package_id,
         price=body.price,
         minutes=body.minutes,
         name=body.name,
     )
-    return store_to_json(store)
+    return store_to_json(store, db)
 
 
 @router.get("/api/reviews")

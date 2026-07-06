@@ -35,6 +35,28 @@ class Settings(BaseSettings):
     smtp_use_tls: bool = True
     verification_code_ttl_seconds: int = 600
 
+    # MySQL (localhost — connection "CarWashing" in MySQL Workbench)
+    mysql_host: str = "127.0.0.1"
+    mysql_port: int = 3306
+    mysql_user: str = "root"
+    mysql_password: str = ""
+    mysql_database: str = "carwashing"
+    # Optional full override, e.g. mysql+pymysql://root:pass@127.0.0.1:3306/carwashing
+    database_url: str = ""
+
+    @property
+    def sqlalchemy_database_url(self) -> str:
+        if self.database_url.strip():
+            return self.database_url.strip()
+        from urllib.parse import quote_plus
+
+        password = quote_plus(self.mysql_password)
+        user = quote_plus(self.mysql_user)
+        return (
+            f"mysql+pymysql://{user}:{password}@{self.mysql_host}:"
+            f"{self.mysql_port}/{self.mysql_database}?charset=utf8mb4"
+        )
+
     @property
     def email_ready(self) -> bool:
         if self.resend_api_key:

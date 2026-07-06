@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from app.database import StoreRecord
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.database import StoreDeviceRecord, StoreRecord
 from app.package_store import get_store_overrides
 
 DEFAULT_PACKAGES = [
@@ -103,7 +106,27 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _devices_for_store(store: StoreRecord) -> list[dict]:
+def _devices_for_store(store: StoreRecord, db: Session | None = None) -> list[dict]:
+    if db is not None:
+        rows = db.scalars(
+            select(StoreDeviceRecord).where(StoreDeviceRecord.store_id == store.id)
+        ).all()
+        if rows:
+            now = _now_iso()
+            return [
+                {
+                    "id": device.id,
+                    "qr_code": device.qr_code,
+                    "bay_name": device.bay_name,
+                    "status": device.status,
+                    "last_heartbeat": (device.last_heartbeat or datetime.now(timezone.utc)).isoformat(),
+                    "total_use_seconds": device.total_use_seconds,
+                    "use_count": device.use_count,
+                    "fault_count": device.fault_count,
+                }
+                for device in rows
+            ]
+
     presets = _DEVICE_PRESETS.get(store.id)
     if presets is None:
         suffix = store.id.rsplit("-", 1)[-1][:4]
@@ -128,8 +151,8 @@ def _devices_for_store(store: StoreRecord) -> list[dict]:
     ]
 
 
-def _packages_for_store(store: StoreRecord) -> list[dict]:
-    overrides = get_store_overrides(store.id)
+def _packages_for_store(store: StoreRecord, db: Session) -> list[dict]:
+    overrides = get_store_overrides(db, store.id)
     packages: list[dict] = []
     for pkg in DEFAULT_PACKAGES:
         merged = dict(pkg)
@@ -140,7 +163,7 @@ def _packages_for_store(store: StoreRecord) -> list[dict]:
     return packages
 
 
-def store_to_json(store: StoreRecord) -> dict:
+def store_to_json(store: StoreRecord, db: Session) -> dict:
     service_types = [
         item.strip()
         for item in store.service_types.split(",")
@@ -149,6 +172,8 @@ def store_to_json(store: StoreRecord) -> dict:
     if not service_types:
         service_types = ["self_service"]
     meta = _STORE_META.get(store.id, {"rating": 5.0, "tags": ["自助洗车"]})
+    rating = store.rating if store.rating else meta["rating"]
+    tags = [item.strip() for item in store.tags.split(",") if item.strip()] or meta["tags"]
     return {
         "id": store.id,
         "owner_account_id": store.owner_account_id,
@@ -156,11 +181,11 @@ def store_to_json(store: StoreRecord) -> dict:
         "address": store.address,
         "latitude": store.latitude,
         "longitude": store.longitude,
-        "rating": meta["rating"],
-        "tags": meta["tags"],
+        "rating": rating,
+        "tags": tags,
         "service_types": service_types,
-        "devices": _devices_for_store(store),
-        "packages": _packages_for_store(store),
+        "devices": _devices_for_store(store, db),
+        "packages": _packages_for_store(store, db),
         "approval_status": store.approval_status,
         "admin_reply": "",
     }
