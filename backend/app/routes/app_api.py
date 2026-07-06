@@ -188,10 +188,8 @@ def get_wallet(
 
 
 @router.get("/api/bundles")
-def list_bundles(
-    db: Session = Depends(get_db),
-    account: AccountRecord = Depends(get_current_account),
-) -> list[dict]:
+def list_bundles(db: Session = Depends(get_db)) -> list[dict]:
+    """Public pricing list so user and shop apps stay in sync."""
     return list_bundle_plans(db)
 
 

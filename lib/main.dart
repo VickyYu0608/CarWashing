@@ -343,9 +343,6 @@ class AppStore extends ChangeNotifier {
   Future<bool> login(String username, String password) async {
     lastAuthMessage = null;
     final trimmed = username.trim();
-    if (trimmed == 'user' || trimmed == 'shop' || trimmed == 'admin') {
-      return _loginLocal(trimmed, password);
-    }
     if (!_shouldUseBackendApi()) {
       return _loginLocal(trimmed, password);
     }
@@ -374,12 +371,15 @@ class AppStore extends ChangeNotifier {
       }
       notifyListeners();
       return true;
-    } on ApiException catch (exception) {
-      lastAuthMessage = exception.message;
+    } on ApiConnectionException {
+      if (trimmed == 'user' || trimmed == 'shop' || trimmed == 'admin') {
+        return _loginLocal(trimmed, password);
+      }
+      lastAuthMessage = AppStrings.current.backendUnreachable;
       notifyListeners();
       return false;
-    } on ApiConnectionException {
-      lastAuthMessage = AppStrings.current.backendUnreachable;
+    } on ApiException catch (exception) {
+      lastAuthMessage = exception.message;
       notifyListeners();
       return false;
     }
@@ -697,14 +697,10 @@ class AppStore extends ChangeNotifier {
     if (!shouldFetchBundlePlansFromBackend) {
       return List<Map<String, dynamic>>.from(bundlePlans);
     }
-    try {
-      final remote = await ApiClient.fetchBundles();
-      bundlePlans = remote;
-      notifyListeners();
-      return remote;
-    } on Object {
-      return List<Map<String, dynamic>>.from(bundlePlans);
-    }
+    final remote = await ApiClient.fetchBundles();
+    bundlePlans = remote;
+    notifyListeners();
+    return remote;
   }
 
   /// Always refetches bundle pricing from the API (e.g. after shop edits prices).
@@ -739,8 +735,7 @@ class AppStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  bool get shouldFetchBundlePlansFromBackend =>
-      _shouldUseBackendApi() && ApiClient.accessToken != null;
+  bool get shouldFetchBundlePlansFromBackend => _shouldUseBackendApi();
 
   void logout() {
     currentAccount = null;

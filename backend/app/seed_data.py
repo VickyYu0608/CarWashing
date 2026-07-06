@@ -13,28 +13,86 @@ def _hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
-def ensure_demo_data(db: Session) -> None:
-    shop = db.scalar(
-        select(AccountRecord).where(AccountRecord.username == "shop")
+def _ensure_demo_account(
+    db: Session,
+    *,
+    id: str,
+    username: str,
+    password: str,
+    email: str,
+    country_code: str,
+    phone: str,
+    role: str,
+    display_name: str,
+    share_code: str = "",
+    shop_address: str = "",
+    shop_latitude: float | None = None,
+    shop_longitude: float | None = None,
+) -> AccountRecord:
+    account = db.scalar(
+        select(AccountRecord).where(AccountRecord.username == username)
     )
-    if shop is None:
-        shop = AccountRecord(
-            id="shop-demo",
-            username="shop",
-            password_hash=_hash_password("123456"),
-            email="shop-demo@wash.local",
-            country_code="+852",
-            phone="13800000002",
-            role="shop",
-            display_name="蓝鲸运营",
-            approval_status="approved",
-            shop_address="香港港岛中西区干诺道中 88 号",
-            shop_latitude=22.2819,
-            shop_longitude=114.1589,
-            share_code="SHOPDEMO1",
-        )
-        db.add(shop)
-        db.flush()
+    if account is not None:
+        return account
+    account = AccountRecord(
+        id=id,
+        username=username,
+        password_hash=_hash_password(password),
+        email=email,
+        country_code=country_code,
+        phone=phone,
+        role=role,
+        display_name=display_name,
+        approval_status="approved",
+        shop_address=shop_address,
+        shop_latitude=shop_latitude,
+        shop_longitude=shop_longitude,
+        share_code=share_code,
+    )
+    db.add(account)
+    db.flush()
+    return account
+
+
+def ensure_demo_data(db: Session) -> None:
+    shop = _ensure_demo_account(
+        db,
+        id="shop-demo",
+        username="shop",
+        password="123456",
+        email="shop-demo@wash.local",
+        country_code="+852",
+        phone="13800000002",
+        role="shop",
+        display_name="蓝鲸运营",
+        shop_address="香港港岛中西区干诺道中 88 号",
+        shop_latitude=22.2819,
+        shop_longitude=114.1589,
+        share_code="SHOPDEMO1",
+    )
+    _ensure_demo_account(
+        db,
+        id="user-demo",
+        username="user",
+        password="123456",
+        email="user-demo@wash.local",
+        country_code="+86",
+        phone="13800000001",
+        role="user",
+        display_name="演示用户",
+        share_code="DEMOCW01",
+    )
+    _ensure_demo_account(
+        db,
+        id="admin-demo",
+        username="admin",
+        password="123456",
+        email="admin-demo@wash.local",
+        country_code="+86",
+        phone="13800000000",
+        role="admin",
+        display_name="平台管理员",
+    )
 
     store_count = db.scalar(select(func.count()).select_from(StoreRecord)) or 0
     if store_count > 0:
