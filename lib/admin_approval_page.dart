@@ -1,5 +1,6 @@
 import 'package:car_washing_app/api_client.dart';
 import 'package:car_washing_app/app_theme.dart';
+import 'package:car_washing_app/l10n/locale_controller.dart';
 import 'package:car_washing_app/license_materials_page.dart';
 import 'package:car_washing_app/main.dart';
 import 'package:flutter/material.dart';
@@ -85,6 +86,7 @@ class _AdminApprovalPageState extends State<AdminApprovalPage> {
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       builder: (context) {
+        final sheetS = context.s;
         return Padding(
           padding: EdgeInsets.only(
             left: 20,
@@ -107,27 +109,27 @@ class _AdminApprovalPageState extends State<AdminApprovalPage> {
                   onPressed: () => Navigator.of(context).push(
                     MaterialPageRoute(
                       builder: (_) => LicenseMaterialsPage(
-                        title: '经营许可证',
+                        title: sheetS.operatingLicense,
                         files: licenseFiles,
                       ),
                     ),
                   ),
                   icon: const Icon(Icons.folder_open_outlined),
-                  label: Text('查看证照（${licenseFiles.length}）'),
+                  label: Text(sheetS.viewLicenseCount(licenseFiles.length)),
                 ),
               ],
               const SizedBox(height: 16),
               SegmentedButton<ApprovalStatus>(
-                segments: const [
+                segments: [
                   ButtonSegment(
                     value: ApprovalStatus.approved,
-                    label: Text('通过'),
-                    icon: Icon(Icons.check_circle_outline),
+                    label: Text(sheetS.approveSegment),
+                    icon: const Icon(Icons.check_circle_outline),
                   ),
                   ButtonSegment(
                     value: ApprovalStatus.rejected,
-                    label: Text('驳回'),
-                    icon: Icon(Icons.cancel_outlined),
+                    label: Text(sheetS.rejectSegment),
+                    icon: const Icon(Icons.cancel_outlined),
                   ),
                 ],
                 selected: {decision},
@@ -141,9 +143,9 @@ class _AdminApprovalPageState extends State<AdminApprovalPage> {
                 controller: replyController,
                 minLines: 2,
                 maxLines: 4,
-                decoration: const InputDecoration(
-                  labelText: '审批意见（选填，驳回时建议填写）',
-                  border: OutlineInputBorder(),
+                decoration: InputDecoration(
+                  labelText: sheetS.approvalCommentOptional,
+                  border: const OutlineInputBorder(),
                 ),
               ),
               const SizedBox(height: 16),
@@ -152,7 +154,7 @@ class _AdminApprovalPageState extends State<AdminApprovalPage> {
                   Navigator.pop(context);
                   await onSubmit(decision, replyController.text.trim());
                 },
-                child: const Text('提交审批'),
+                child: Text(sheetS.submitApproval),
               ),
             ],
           ),
@@ -164,6 +166,7 @@ class _AdminApprovalPageState extends State<AdminApprovalPage> {
 
   @override
   Widget build(BuildContext context) {
+    final s = context.s;
     final accountCount = _pending?['pending_account_count'] as int? ?? 0;
     final storeCount = _pending?['pending_store_count'] as int? ?? 0;
     final accounts = (_pending?['pending_accounts'] as List<dynamic>? ?? [])
@@ -187,9 +190,9 @@ class _AdminApprovalPageState extends State<AdminApprovalPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
-                  '审核中心',
-                  style: TextStyle(
+                Text(
+                  s.approvalCenter,
+                  style: const TextStyle(
                     color: Colors.white,
                     fontSize: 22,
                     fontWeight: FontWeight.w800,
@@ -198,9 +201,9 @@ class _AdminApprovalPageState extends State<AdminApprovalPage> {
                 const SizedBox(height: 8),
                 Text(
                   accountCount + storeCount > 0
-                      ? '有 ${accountCount + storeCount} 项待处理，请优先审核'
-                      : '暂无待审核项，全部已处理',
-                  style: TextStyle(color: Colors.white.withOpacity(0.9)),
+                      ? s.pendingItemsCount(accountCount + storeCount)
+                      : s.allClear,
+                  style: TextStyle(color: Colors.white.withValues(alpha: 0.9)),
                 ),
               ],
             ),
@@ -213,18 +216,18 @@ class _AdminApprovalPageState extends State<AdminApprovalPage> {
             ))
           else ...[
             _SectionHeader(
-              title: '商家账号审核',
+              title: s.shopAccountReview,
               count: accountCount,
               pending: accountCount > 0,
             ),
             if (accounts.isEmpty)
-              const _EmptyHint(text: '暂无待审商家账号')
+              _EmptyHint(text: s.noPendingShopAccounts)
             else
               for (final item in accounts)
                 _PendingAccountCard(
                   data: item,
                   onReview: () => _showReviewSheet(
-                    title: item['display_name'] as String? ?? '商家',
+                    title: item['display_name'] as String? ?? s.defaultMerchantName,
                     subtitle: item['phone'] as String? ?? '',
                     licenseFiles: (item['license_files'] as List<dynamic>? ?? [])
                         .map((e) => e.toString())
@@ -235,18 +238,18 @@ class _AdminApprovalPageState extends State<AdminApprovalPage> {
                 ),
             const SizedBox(height: 20),
             _SectionHeader(
-              title: '门店审核',
+              title: s.storeReview,
               count: storeCount,
               pending: storeCount > 0,
             ),
             if (stores.isEmpty)
-              const _EmptyHint(text: '暂无待审门店')
+              _EmptyHint(text: s.noPendingStores)
             else
               for (final item in stores)
                 _PendingStoreCard(
                   data: item,
                   onReview: () => _showReviewSheet(
-                    title: item['name'] as String? ?? '门店',
+                    title: item['name'] as String? ?? s.defaultStoreName,
                     subtitle: item['address'] as String? ?? '',
                     onSubmit: (status, reply) =>
                         _approveStore(item['id'] as String, status, reply),
@@ -272,6 +275,7 @@ class _SectionHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final s = context.s;
     return Row(
       children: [
         Text(title, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
@@ -279,11 +283,11 @@ class _SectionHeader extends StatelessWidget {
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
           decoration: BoxDecoration(
-            color: pending ? Colors.red.withOpacity(0.12) : Colors.green.withOpacity(0.12),
+            color: pending ? Colors.red.withValues(alpha: 0.12) : Colors.green.withValues(alpha: 0.12),
             borderRadius: BorderRadius.circular(12),
           ),
           child: Text(
-            pending ? '待审 $count' : '已清空',
+            pending ? s.pendingReviewBadge(count) : s.clearedBadge,
             style: TextStyle(
               color: pending ? Colors.red : Colors.green,
               fontWeight: FontWeight.w700,
@@ -317,7 +321,10 @@ class _PendingAccountCard extends StatelessWidget {
           style: const TextStyle(fontWeight: FontWeight.w700),
         ),
         subtitle: Text(data['shop_address'] as String? ?? data['phone'] as String? ?? ''),
-        trailing: FilledButton(onPressed: onReview, child: const Text('审核')),
+        trailing: FilledButton(
+          onPressed: onReview,
+          child: Text(context.s.reviewBtn),
+        ),
       ),
     );
   }
@@ -344,7 +351,10 @@ class _PendingStoreCard extends StatelessWidget {
           style: const TextStyle(fontWeight: FontWeight.w700),
         ),
         subtitle: Text(data['address'] as String? ?? ''),
-        trailing: FilledButton(onPressed: onReview, child: const Text('审核')),
+        trailing: FilledButton(
+          onPressed: onReview,
+          child: Text(context.s.reviewBtn),
+        ),
       ),
     );
   }

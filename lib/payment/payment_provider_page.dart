@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:car_washing_app/l10n/app_strings.dart';
+import 'package:car_washing_app/l10n/locale_controller.dart';
 import 'package:car_washing_app/payment/alipay_pay_service.dart';
 import 'package:car_washing_app/payment/payment_gateway.dart';
 import 'package:car_washing_app/payment/payment_models.dart';
@@ -99,7 +101,7 @@ class _PaymentProviderPageState extends State<PaymentProviderPage> {
 
     setState(() {
       _isLaunching = false;
-      _errorMessage = result.errorMessage ?? '微信支付失败';
+      _errorMessage = result.errorMessage ?? AppStrings.current.wechatPayFailed;
     });
   }
 
@@ -153,7 +155,7 @@ class _PaymentProviderPageState extends State<PaymentProviderPage> {
 
     setState(() {
       _isLaunching = false;
-      _errorMessage = result.errorMessage ?? '支付宝支付失败';
+      _errorMessage = result.errorMessage ?? AppStrings.current.alipayPayFailed;
     });
   }
 
@@ -193,7 +195,7 @@ class _PaymentProviderPageState extends State<PaymentProviderPage> {
     if (!result.approved) {
       setState(() {
         _isSubmitting = false;
-        _errorMessage = result.errorMessage ?? '授权失败';
+        _errorMessage = result.errorMessage ?? AppStrings.current.authFailed;
       });
       return;
     }
@@ -203,7 +205,7 @@ class _PaymentProviderPageState extends State<PaymentProviderPage> {
 
   Future<void> _confirmPayment() async {
     if (!_userConfirmed) {
-      setState(() => _errorMessage = '请确认付款信息后再继续');
+      setState(() => _errorMessage = context.s.confirmPaymentInfo);
       return;
     }
     await _completeAuthorization(userConfirmedInProvider: true);
@@ -211,7 +213,7 @@ class _PaymentProviderPageState extends State<PaymentProviderPage> {
 
   Future<void> _confirmApplePay() async {
     if (!_userConfirmed) {
-      setState(() => _errorMessage = '请确认 Apple Pay 付款信息');
+      setState(() => _errorMessage = context.s.confirmApplePayInfo);
       return;
     }
 
@@ -219,8 +221,8 @@ class _PaymentProviderPageState extends State<PaymentProviderPage> {
     await showDialog<void>(
       context: context,
       barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        title: const Text('Apple Pay'),
+      builder: (dialogContext) => AlertDialog(
+        title: Text(context.s.paymentMethodApplePay),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -230,7 +232,7 @@ class _PaymentProviderPageState extends State<PaymentProviderPage> {
             ),
             const SizedBox(height: 12),
             Text(
-              '请使用 Face ID / Touch ID 验证\n确认支付 ¥${session.amount.toStringAsFixed(0)}',
+              context.s.applePayBiometricVerify(session.amount),
             ),
             const SizedBox(height: 16),
             const LinearProgressIndicator(),
@@ -254,6 +256,7 @@ class _PaymentProviderPageState extends State<PaymentProviderPage> {
 
   @override
   Widget build(BuildContext context) {
+    final s = context.s;
     if (_redirecting && (_usesWeChatPay || _usesAlipayPay)) {
       return _RedirectSplash(
         method: method,
@@ -293,7 +296,7 @@ class _PaymentProviderPageState extends State<PaymentProviderPage> {
         appBar: AppBar(
           backgroundColor: _providerBackground,
           foregroundColor: Colors.white,
-          title: Text('${method.providerName} · 安全支付'),
+          title: Text(s.securePayment(method.providerName)),
           leading: _isSubmitting
               ? null
               : IconButton(
@@ -329,7 +332,7 @@ class _PaymentProviderPageState extends State<PaymentProviderPage> {
             const SizedBox(height: 8),
             Text(
               _securityHint,
-              style: TextStyle(color: Colors.white.withOpacity(0.85), height: 1.4),
+              style: TextStyle(color: Colors.white.withValues(alpha: 0.85), height: 1.4),
             ),
             if (_errorMessage != null) ...[
               const SizedBox(height: 12),
@@ -370,8 +373,8 @@ class _PaymentProviderPageState extends State<PaymentProviderPage> {
                         ProviderAuthorizationResult.cancelled(),
                       ),
               child: Text(
-                '取消支付',
-                style: TextStyle(color: Colors.white.withOpacity(0.9)),
+                s.cancelPayment,
+                style: TextStyle(color: Colors.white.withValues(alpha: 0.9)),
               ),
             ),
           ],
@@ -380,18 +383,25 @@ class _PaymentProviderPageState extends State<PaymentProviderPage> {
     );
   }
 
-  String get _confirmLabel => switch (method) {
-        PaymentMethod.creditCard =>
-          '确认使用尾号 ${request.card?.last4 ?? '****'} 卡片支付 ¥${session.amount.toStringAsFixed(0)}',
-        _ => '',
-      };
+  String get _confirmLabel {
+    final s = AppStrings.current;
+    return switch (method) {
+      PaymentMethod.creditCard => s.confirmCardPay(
+          request.card?.last4 ?? '****',
+          session.amount,
+        ),
+      _ => '',
+    };
+  }
 
-  String get _securityHint => switch (method) {
-        PaymentMethod.applePay => '生物识别验证由 Apple Pay 安全模块处理。',
-        PaymentMethod.creditCard =>
-          '卡片信息已加密处理，本 App 不会储存完整卡号或 CVV。',
-        _ => '',
-      };
+  String get _securityHint {
+    final s = AppStrings.current;
+    return switch (method) {
+      PaymentMethod.applePay => s.applePaySecurityHint,
+      PaymentMethod.creditCard => s.cardEncryptedHint,
+      _ => '',
+    };
+  }
 
   Color get _providerBackground => switch (method) {
         PaymentMethod.applePay => Colors.black,
@@ -401,11 +411,14 @@ class _PaymentProviderPageState extends State<PaymentProviderPage> {
 
   Color get _providerAccent => _providerBackground;
 
-  String get _primaryButtonLabel => switch (method) {
-        PaymentMethod.applePay => '通过 Face ID 支付',
-        PaymentMethod.creditCard => '确认信用卡支付',
-        _ => '确认支付',
-      };
+  String get _primaryButtonLabel {
+    final s = AppStrings.current;
+    return switch (method) {
+      PaymentMethod.applePay => s.payWithFaceId,
+      PaymentMethod.creditCard => s.confirmCreditCardPay,
+      _ => s.confirmPayment,
+    };
+  }
 }
 
 class _WeChatPayErrorView extends StatelessWidget {
@@ -425,12 +438,13 @@ class _WeChatPayErrorView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final s = context.s;
     return Scaffold(
       backgroundColor: const Color(0xff07c160),
       appBar: AppBar(
         backgroundColor: const Color(0xff07c160),
         foregroundColor: Colors.white,
-        title: const Text('微信支付'),
+        title: Text(s.paymentMethodWechat),
       ),
       body: ListView(
         padding: const EdgeInsets.all(16),
@@ -458,13 +472,13 @@ class _WeChatPayErrorView extends StatelessWidget {
                     height: 22,
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
-                : const Text('重试微信支付'),
+                : Text(s.retryWechatPay),
           ),
           TextButton(
             onPressed: isRetrying ? null : onCancel,
             child: Text(
-              '取消支付',
-              style: TextStyle(color: Colors.white.withOpacity(0.9)),
+              s.cancelPayment,
+              style: TextStyle(color: Colors.white.withValues(alpha: 0.9)),
             ),
           ),
         ],
@@ -490,12 +504,13 @@ class _AlipayPayErrorView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final s = context.s;
     return Scaffold(
       backgroundColor: const Color(0xff1677ff),
       appBar: AppBar(
         backgroundColor: const Color(0xff1677ff),
         foregroundColor: Colors.white,
-        title: const Text('支付宝'),
+        title: Text(s.paymentMethodAlipay),
       ),
       body: ListView(
         padding: const EdgeInsets.all(16),
@@ -523,13 +538,13 @@ class _AlipayPayErrorView extends StatelessWidget {
                     height: 22,
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
-                : const Text('重试支付宝支付'),
+                : Text(s.retryAlipayPay),
           ),
           TextButton(
             onPressed: isRetrying ? null : onCancel,
             child: Text(
-              '取消支付',
-              style: TextStyle(color: Colors.white.withOpacity(0.9)),
+              s.cancelPayment,
+              style: TextStyle(color: Colors.white.withValues(alpha: 0.9)),
             ),
           ),
         ],
@@ -551,6 +566,7 @@ class _RedirectSplash extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final s = context.s;
     final color = switch (method) {
       PaymentMethod.alipay => const Color(0xff1677ff),
       PaymentMethod.wechatPay => const Color(0xff07c160),
@@ -569,7 +585,7 @@ class _RedirectSplash extends StatelessWidget {
               Icon(_redirectIcon, size: 72, color: Colors.white),
               const SizedBox(height: 24),
               Text(
-                '正在跳转${method.providerName}',
+                s.redirectingTo(method.providerName),
                 style: const TextStyle(
                   color: Colors.white,
                   fontSize: 22,
@@ -578,16 +594,16 @@ class _RedirectSplash extends StatelessWidget {
               ),
               const SizedBox(height: 8),
               Text(
-                '¥${amount.toStringAsFixed(0)} · $seconds 秒',
-                style: TextStyle(color: Colors.white.withOpacity(0.9)),
+                s.redirectCountdown(amount, seconds),
+                style: TextStyle(color: Colors.white.withValues(alpha: 0.9)),
               ),
               const SizedBox(height: 24),
               const CircularProgressIndicator(color: Colors.white),
               const SizedBox(height: 16),
               Text(
-                '即将打开${method.providerName}收银台\n请输入支付密码完成付款',
+                s.openingCashier(method.providerName),
                 textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.white.withOpacity(0.85), height: 1.5),
+                style: TextStyle(color: Colors.white.withValues(alpha: 0.85), height: 1.5),
               ),
             ],
           ),
@@ -617,6 +633,7 @@ class _ProviderPaymentCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final s = context.s;
     return Card(
       color: Colors.white,
       child: Padding(
@@ -624,7 +641,7 @@ class _ProviderPaymentCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('收款方', style: Theme.of(context).textTheme.bodySmall),
+            Text(s.payeeLabel, style: Theme.of(context).textTheme.bodySmall),
             Text(
               session.merchantName,
               style: Theme.of(context)
@@ -637,7 +654,7 @@ class _ProviderPaymentCard extends StatelessWidget {
             const Divider(height: 24),
             Row(
               children: [
-                const Text('支付金额'),
+                Text(s.paymentAmount),
                 const Spacer(),
                 Text(
                   '¥${session.amount.toStringAsFixed(0)}',
@@ -648,18 +665,18 @@ class _ProviderPaymentCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 12),
-            Text('付款账户', style: Theme.of(context).textTheme.bodySmall),
+            Text(s.payerAccountLabel, style: Theme.of(context).textTheme.bodySmall),
             Text(
               '${session.payerDisplayName} · ${session.payerPhoneMasked}',
               style: const TextStyle(fontWeight: FontWeight.w600),
             ),
             if (card != null) ...[
               const SizedBox(height: 8),
-              Text('卡片 · ${card!.cardholderName} · 尾号 ${card!.last4}'),
+              Text(s.cardLine(card!.cardholderName, card!.last4)),
             ],
             const SizedBox(height: 8),
             Text(
-              '订单号 ${session.orderId}',
+              s.orderIdShort(session.orderId),
               style: Theme.of(context).textTheme.bodySmall,
             ),
           ],

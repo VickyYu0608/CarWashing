@@ -125,7 +125,7 @@ ThemeData buildAppTheme() {
         borderSide: const BorderSide(color: AppColors.primary, width: 2),
       ),
       labelStyle: const TextStyle(color: AppColors.textSecondary),
-      hintStyle: TextStyle(color: AppColors.textSecondary.withOpacity(0.8)),
+      hintStyle: TextStyle(color: AppColors.textSecondary.withValues(alpha: 0.8)),
     ),
     dividerTheme: const DividerThemeData(
       color: AppColors.cardBorder,
@@ -246,12 +246,12 @@ class AppBrandLogo extends StatelessWidget {
     return Container(
       width: size,
       height: size,
-      decoration: BoxDecoration(
+      decoration: const BoxDecoration(
         shape: BoxShape.circle,
-        gradient: const LinearGradient(
+        gradient: LinearGradient(
           colors: [AppColors.primary, AppColors.primaryLight],
         ),
-        boxShadow: const [
+        boxShadow: [
           BoxShadow(
             color: Color(0x401D6FE8),
             blurRadius: 18,
@@ -288,6 +288,120 @@ class AppIconBadge extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
       ),
       child: Icon(icon, color: AppColors.primary, size: size * 0.5),
+    );
+  }
+}
+
+/// Extra scroll inset so center-docked scan FAB does not cover list tails.
+const double kUserShellFabClearance = 56;
+
+/// Bottom bar with a center notch for the scan FAB (avoids covering nav labels).
+class UserDockedBottomNav extends StatelessWidget {
+  const UserDockedBottomNav({
+    required this.selectedIndex,
+    required this.onDestinationSelected,
+    required this.destinations,
+    super.key,
+  });
+
+  final int selectedIndex;
+  final ValueChanged<int> onDestinationSelected;
+  final List<NavigationDestination> destinations;
+
+  @override
+  Widget build(BuildContext context) {
+    assert(destinations.length == 4, 'UserDockedBottomNav expects 4 tabs');
+    return Material(
+      elevation: 8,
+      shadowColor: const Color(0x141D6FE8),
+      color: Colors.white,
+      child: BottomAppBar(
+        height: 64,
+        padding: EdgeInsets.zero,
+        color: Colors.white,
+        elevation: 0,
+        surfaceTintColor: Colors.white,
+        shape: const CircularNotchedRectangle(),
+        notchMargin: 8,
+        child: Row(
+          children: [
+            Expanded(
+              child: _DockedNavItem(
+                destination: destinations[0],
+                selected: selectedIndex == 0,
+                onTap: () => onDestinationSelected(0),
+              ),
+            ),
+            Expanded(
+              child: _DockedNavItem(
+                destination: destinations[1],
+                selected: selectedIndex == 1,
+                onTap: () => onDestinationSelected(1),
+              ),
+            ),
+            const SizedBox(width: 76),
+            Expanded(
+              child: _DockedNavItem(
+                destination: destinations[2],
+                selected: selectedIndex == 2,
+                onTap: () => onDestinationSelected(2),
+              ),
+            ),
+            Expanded(
+              child: _DockedNavItem(
+                destination: destinations[3],
+                selected: selectedIndex == 3,
+                onTap: () => onDestinationSelected(3),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _DockedNavItem extends StatelessWidget {
+  const _DockedNavItem({
+    required this.destination,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final NavigationDestination destination;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = selected ? AppColors.primary : AppColors.textSecondary;
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            IconTheme(
+              data: IconThemeData(color: color, size: 24),
+              child: selected
+                  ? (destination.selectedIcon ?? destination.icon)
+                  : destination.icon,
+            ),
+            const SizedBox(height: 2),
+            Text(
+              destination.label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: color,
+                fontSize: 11,
+                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

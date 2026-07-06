@@ -1,3 +1,4 @@
+import 'package:car_washing_app/l10n/locale_controller.dart';
 import 'package:car_washing_app/payment/payment_models.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -67,6 +68,7 @@ class _WeChatPayCashierPageState extends State<WeChatPayCashierPage> {
 
   @override
   Widget build(BuildContext context) {
+    final s = context.s;
     return Scaffold(
       backgroundColor: const Color(0xfff5f5f5),
       appBar: AppBar(
@@ -86,7 +88,7 @@ class _WeChatPayCashierPageState extends State<WeChatPayCashierPage> {
               child: const Icon(Icons.chat_bubble, color: Colors.white, size: 14),
             ),
             const SizedBox(width: 8),
-            const Text('微信支付'),
+            Text(s.paymentMethodWechat),
           ],
         ),
         leading: IconButton(
@@ -125,10 +127,10 @@ class _WeChatPayCashierPageState extends State<WeChatPayCashierPage> {
                   style: const TextStyle(color: Colors.black45),
                 ),
                 const SizedBox(height: 28),
-                const Text(
-                  '请输入支付密码',
+                Text(
+                  s.enterPayPassword,
                   textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 15, color: Colors.black87),
+                  style: const TextStyle(fontSize: 15, color: Colors.black87),
                 ),
                 const SizedBox(height: 18),
                 Row(

@@ -15,6 +15,7 @@ void main() {
     final user = await store.registerUser(
       countryCode: '+86',
       phone: '13900000000',
+      email: 'user@example.com',
       verificationCode: '0000',
       password: '123456',
       displayName: '新用户',
@@ -31,6 +32,7 @@ void main() {
     final shop = await store.registerShop(
       countryCode: '+86',
       phone: '13900000001',
+      email: 'shop@example.com',
       verificationCode: '1111',
       password: '123456',
       storeName: '新洗车店',
@@ -69,14 +71,14 @@ void main() {
     await tester.tap(find.text('用户注册'));
     await tester.pumpAndSettle();
     expect(find.text('用户注册'), findsOneWidget);
-    expect(find.text('短信验证码'), findsOneWidget);
+    expect(find.text('邮箱验证码'), findsOneWidget);
 
-    await tester.pageBack();
+    await tester.tap(find.byType(BackButton));
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('商家注册'));
     await tester.pumpAndSettle();
     expect(find.text('商家注册'), findsOneWidget);
-    expect(find.text('短信验证码'), findsOneWidget);
+    expect(find.text('邮箱验证码'), findsOneWidget);
   });
 }

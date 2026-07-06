@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:car_washing_app/l10n/app_strings.dart';
+import 'package:car_washing_app/l10n/locale_controller.dart';
 import 'package:car_washing_app/payment/api_payment_gateway.dart';
 import 'package:car_washing_app/payment/payment_coordinator.dart';
 import 'package:car_washing_app/payment/payment_models.dart';
@@ -89,7 +91,7 @@ class _PaymentPageState extends State<PaymentPage> {
       if (session.isExpired) {
         setState(() {
           _phase = PaymentPhase.expired;
-          _errorMessage = '支付会话已过期，请返回重新下单';
+          _errorMessage = AppStrings.current.paymentSessionExpiredReturn;
         });
         _countdownTimer?.cancel();
         return;
@@ -124,25 +126,27 @@ class _PaymentPageState extends State<PaymentPage> {
   }
 
   Future<bool> _confirmAmountDialog() async {
+    final s = context.s;
     final confirmed = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        title: const Text('确认支付'),
+      builder: (dialogContext) => AlertDialog(
+        title: Text(s.confirmPayment),
         content: Text(
-          '您将向「${checkout.storeName}」支付 '
-          '¥${checkout.amount.toStringAsFixed(0)}，'
-          '使用${_selectedMethod!.label}。\n\n'
-          '请确认金额与收款方无误后再继续。',
+          s.paymentConfirmDialogBody(
+            checkout.storeName,
+            checkout.amount,
+            _selectedMethod!.label,
+          ),
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('取消'),
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: Text(s.cancelBtn),
           ),
           FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('确认继续'),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: Text(s.confirmContinue),
           ),
         ],
       ),
@@ -162,7 +166,7 @@ class _PaymentPageState extends State<PaymentPage> {
     if (_selectedMethod == PaymentMethod.creditCard &&
         !(_formKey.currentState?.validate() ?? false)) {
       setState(() {
-        _errorMessage = '请填写完整的信用卡资料';
+        _errorMessage = context.s.fillCompleteCardInfo;
         _phase = PaymentPhase.failed;
       });
       return;
@@ -216,7 +220,7 @@ class _PaymentPageState extends State<PaymentPage> {
       if (authorization == null || authorization.userCancelled) {
         setState(() {
           _phase = PaymentPhase.cancelled;
-          _errorMessage = '您已取消支付';
+          _errorMessage = context.s.paymentCancelledByUser;
         });
         return;
       }
@@ -266,18 +270,19 @@ class _PaymentPageState extends State<PaymentPage> {
 
   @override
   Widget build(BuildContext context) {
+    final s = context.s;
     return PopScope(
       canPop: !_isBusy,
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('收银台'),
+          title: Text(s.cashierTitle),
           actions: [
             Padding(
               padding: const EdgeInsets.only(right: 12),
               child: Center(
                 child: Text(
                   _phase == PaymentPhase.expired
-                      ? '已过期'
+                      ? s.expiredLabel
                       : formatPaymentCountdown(_remainingTime),
                   style: TextStyle(
                     color: _remainingTime.inMinutes < 3
@@ -303,7 +308,7 @@ class _PaymentPageState extends State<PaymentPage> {
             ),
             const SizedBox(height: 20),
             Text(
-              '选择付款方式',
+              s.selectPaymentMethod,
               style: Theme.of(context)
                   .textTheme
                   .titleMedium
@@ -319,7 +324,7 @@ class _PaymentPageState extends State<PaymentPage> {
                   icon: _methodIcon(method),
                   iconColor: _methodColor(method),
                   subtitleOverride: method == PaymentMethod.applePay && !_applePayAvailable
-                      ? '仅 iOS 设备可用'
+                      ? s.iosOnly
                       : null,
                   onTap: () => setState(() {
                     _selectedMethod = method;
@@ -338,8 +343,7 @@ class _PaymentPageState extends State<PaymentPage> {
               ),
               const SizedBox(height: 8),
               Text(
-                '正式环境应使用 Stripe / Adyen 等 PCI 认证托管字段，'
-                '本 App 不会储存完整卡号或 CVV。',
+                s.pciComplianceNote,
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                       color: Theme.of(context).colorScheme.outline,
                       height: 1.4,
@@ -369,13 +373,13 @@ class _PaymentPageState extends State<PaymentPage> {
                   : const Icon(Icons.lock_outline),
               label: Text(
                 switch (_phase) {
-                  PaymentPhase.processing => '创建支付单...',
-                  PaymentPhase.authorizing => '等待授权...',
-                  PaymentPhase.verifying => '校验支付结果...',
-                  PaymentPhase.expired => '会话已过期',
+                  PaymentPhase.processing => s.creatingPayment,
+                  PaymentPhase.authorizing => s.awaitingAuthorization,
+                  PaymentPhase.verifying => s.verifyingPayment,
+                  PaymentPhase.expired => s.sessionExpired,
                   _ => _selectedMethod == null
-                      ? '请选择付款方式'
-                      : '确认支付 ¥${checkout.amount.toStringAsFixed(0)}',
+                      ? s.selectMethodFirst
+                      : s.confirmPayAmount(checkout.amount),
                 },
               ),
             ),
@@ -419,6 +423,7 @@ class _OrderSummaryCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final s = context.s;
     return Card(
       color: Theme.of(context).colorScheme.primaryContainer,
       child: Padding(
@@ -438,7 +443,7 @@ class _OrderSummaryCard extends StatelessWidget {
             const SizedBox(height: 12),
             Row(
               children: [
-                const Text('应付金额'),
+                Text(s.amountDue),
                 const Spacer(),
                 Text(
                   '¥${amount.toStringAsFixed(0)}',
@@ -449,15 +454,15 @@ class _OrderSummaryCard extends StatelessWidget {
               ],
             ),
             if (usedFreeWash)
-              const Padding(
-                padding: EdgeInsets.only(top: 4),
-                child: Text('已使用免费洗车次数'),
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(s.usedFreeWashCredits),
               ),
             const SizedBox(height: 8),
-            Text('付款账户 $payerMasked'),
-            Text('订单号：$orderId', style: Theme.of(context).textTheme.bodySmall),
+            Text(s.payerAccount(payerMasked)),
+            Text(s.orderIdLine(orderId), style: Theme.of(context).textTheme.bodySmall),
             Text(
-              '支付会话 15 分钟内有效',
+              s.sessionValid15Min,
               style: Theme.of(context).textTheme.bodySmall,
             ),
           ],
@@ -493,7 +498,7 @@ class _PaymentMethodTile extends StatelessWidget {
       child: ListTile(
         enabled: enabled,
         leading: CircleAvatar(
-          backgroundColor: iconColor.withOpacity(0.12),
+          backgroundColor: iconColor.withValues(alpha: 0.12),
           child: Icon(icon, color: iconColor),
         ),
         title: Text(method.label),
@@ -528,6 +533,7 @@ class _CreditCardForm extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final s = context.s;
     return Form(
       key: formKey,
       child: Column(
@@ -536,12 +542,12 @@ class _CreditCardForm extends StatelessWidget {
             controller: cardholderController,
             enabled: enabled,
             textCapitalization: TextCapitalization.words,
-            decoration: const InputDecoration(
-              labelText: '持卡人姓名',
-              border: OutlineInputBorder(),
+            decoration: InputDecoration(
+              labelText: s.cardholderName,
+              border: const OutlineInputBorder(),
             ),
             validator: (value) =>
-                (value ?? '').trim().length < 2 ? '请填写持卡人姓名' : null,
+                (value ?? '').trim().length < 2 ? s.enterCardholderName : null,
           ),
           const SizedBox(height: 12),
           TextFormField(
@@ -553,14 +559,14 @@ class _CreditCardForm extends StatelessWidget {
               LengthLimitingTextInputFormatter(19),
               _CardNumberFormatter(),
             ],
-            decoration: const InputDecoration(
-              labelText: '卡号',
+            decoration: InputDecoration(
+              labelText: s.cardNumber,
               hintText: '4242 4242 4242 4242',
-              border: OutlineInputBorder(),
+              border: const OutlineInputBorder(),
             ),
             validator: (value) {
               final digits = (value ?? '').replaceAll(RegExp(r'\D'), '');
-              return digits.length < 13 ? '请输入有效的卡号' : null;
+              return digits.length < 13 ? s.invalidCardNumber : null;
             },
           ),
           const SizedBox(height: 12),
@@ -576,12 +582,12 @@ class _CreditCardForm extends StatelessWidget {
                     LengthLimitingTextInputFormatter(4),
                     _ExpiryDateFormatter(),
                   ],
-                  decoration: const InputDecoration(
-                    labelText: '到期日 MM/YY',
-                    border: OutlineInputBorder(),
+                  decoration: InputDecoration(
+                    labelText: s.expiryDate,
+                    border: const OutlineInputBorder(),
                   ),
                   validator: (value) =>
-                      (value ?? '').length < 5 ? '格式 MM/YY' : null,
+                      (value ?? '').length < 5 ? s.expiryFormat : null,
                 ),
               ),
               const SizedBox(width: 12),
@@ -600,7 +606,7 @@ class _CreditCardForm extends StatelessWidget {
                     border: OutlineInputBorder(),
                   ),
                   validator: (value) => !RegExp(r'^\d{3,4}$').hasMatch(value ?? '')
-                      ? '3-4 位数字'
+                      ? s.cvvInvalid
                       : null,
                 ),
               ),
@@ -623,6 +629,7 @@ class _PaymentStatusBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final s = context.s;
     if (phase == PaymentPhase.idle && errorMessage == null) {
       return const SizedBox.shrink();
     }
@@ -638,23 +645,23 @@ class _PaymentStatusBanner extends StatelessWidget {
         background = Colors.blue.shade50;
         icon = Icons.hourglass_top_outlined;
         message = switch (phase) {
-          PaymentPhase.processing => '正在创建支付单...',
-          PaymentPhase.authorizing => '请在支付渠道完成本人确认...',
-          PaymentPhase.verifying => '正在校验支付结果...',
-          _ => '处理中...',
+          PaymentPhase.processing => s.creatingPaymentBanner,
+          PaymentPhase.authorizing => s.authInProviderBanner,
+          PaymentPhase.verifying => s.verifyingBanner,
+          _ => s.processingGeneric,
         };
       case PaymentPhase.expired:
         background = Colors.orange.shade50;
         icon = Icons.timer_off_outlined;
-        message = errorMessage ?? '支付会话已过期';
+        message = errorMessage ?? s.sessionExpired;
       case PaymentPhase.cancelled:
         background = Colors.grey.shade100;
         icon = Icons.cancel_outlined;
-        message = errorMessage ?? '已取消支付';
+        message = errorMessage ?? s.paymentCancelled;
       case PaymentPhase.failed:
         background = Colors.red.shade50;
         icon = Icons.error_outline;
-        message = errorMessage ?? '付款失败';
+        message = errorMessage ?? s.paymentFailed;
       default:
         return const SizedBox.shrink();
     }
@@ -684,8 +691,7 @@ class _SecurityNotice extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Text(
-      '支付流程：选择方式 → 确认金额 → 跳转支付渠道授权 → 服务端扣款校验 → 支付凭证。'
-      '支付宝/微信密码仅在官方 App 内输入，商户端不接触。',
+      context.s.paymentFlowNotice,
       style: Theme.of(context).textTheme.bodySmall?.copyWith(
             color: Theme.of(context).colorScheme.outline,
             height: 1.4,

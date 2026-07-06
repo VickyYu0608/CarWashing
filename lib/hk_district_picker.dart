@@ -1,5 +1,6 @@
 import 'package:car_washing_app/hk_districts.dart';
 import 'package:car_washing_app/hk_sub_areas.dart';
+import 'package:car_washing_app/l10n/locale_controller.dart';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 
@@ -27,6 +28,7 @@ class HkDistrictPicker extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final s = context.s;
     final districts = hkDistrictsForRegion(majorRegion);
     final selectedDistrict =
         hkDistrictByName(districtName) ?? districts.first;
@@ -37,16 +39,16 @@ class HkDistrictPicker extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const Text(
-          '香港地区（三大区 · 18区 · 细分区域）',
-          style: TextStyle(fontWeight: FontWeight.w700),
+        Text(
+          s.hkRegionTitle,
+          style: const TextStyle(fontWeight: FontWeight.w700),
         ),
         const SizedBox(height: 8),
         DropdownButtonFormField<HkMajorRegion>(
           initialValue: majorRegion,
-          decoration: const InputDecoration(
-            labelText: '三大区',
-            border: OutlineInputBorder(),
+          decoration: InputDecoration(
+            labelText: s.hkMajorRegion,
+            border: const OutlineInputBorder(),
           ),
           items: [
             for (final region in HkMajorRegion.values)
@@ -61,9 +63,9 @@ class HkDistrictPicker extends StatelessWidget {
         const SizedBox(height: 12),
         DropdownButtonFormField<String>(
           initialValue: selectedDistrict.nameZh,
-          decoration: const InputDecoration(
-            labelText: '18区',
-            border: OutlineInputBorder(),
+          decoration: InputDecoration(
+            labelText: s.hk18Districts,
+            border: const OutlineInputBorder(),
           ),
           items: [
             for (final district in districts)
@@ -86,9 +88,9 @@ class HkDistrictPicker extends StatelessWidget {
         if (subAreas.isNotEmpty)
           DropdownButtonFormField<String>(
             initialValue: selectedSubArea?.nameZh,
-            decoration: const InputDecoration(
-              labelText: '细分区域',
-              border: OutlineInputBorder(),
+            decoration: InputDecoration(
+              labelText: s.hkSubArea,
+              border: const OutlineInputBorder(),
             ),
             items: [
               for (final area in subAreas)
@@ -107,7 +109,11 @@ class HkDistrictPicker extends StatelessWidget {
         if (selectedSubArea != null) ...[
           const SizedBox(height: 8),
           Text(
-            '已选：${buildHkLocationLabel(majorRegion: majorRegion, district: selectedDistrict, subArea: selectedSubArea)}',
+            s.hkSelected(buildHkLocationLabel(
+              majorRegion: majorRegion,
+              district: selectedDistrict,
+              subArea: selectedSubArea,
+            )),
             style: Theme.of(context).textTheme.bodySmall,
           ),
         ],
@@ -115,9 +121,9 @@ class HkDistrictPicker extends StatelessWidget {
         TextField(
           controller: detailController,
           onChanged: onDetailChanged,
-          decoration: const InputDecoration(
-            labelText: '详细地址（街道/大厦，选填）',
-            border: OutlineInputBorder(),
+          decoration: InputDecoration(
+            labelText: s.hkDetailAddress,
+            border: const OutlineInputBorder(),
           ),
         ),
       ],

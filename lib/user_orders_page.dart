@@ -1,4 +1,5 @@
 import 'package:car_washing_app/app_theme.dart';
+import 'package:car_washing_app/l10n/locale_controller.dart';
 import 'package:car_washing_app/main.dart';
 import 'package:flutter/material.dart';
 
@@ -30,6 +31,7 @@ class _UserOrdersPageState extends State<UserOrdersPage>
 
   @override
   Widget build(BuildContext context) {
+    final s = context.s;
     final appStore = AppScope.of(context);
     return AnimatedBuilder(
       animation: appStore,
@@ -53,11 +55,11 @@ class _UserOrdersPageState extends State<UserOrdersPage>
                   labelColor: AppColors.primary,
                   unselectedLabelColor: AppColors.textSecondary,
                   indicatorColor: AppColors.primary,
-                  tabs: const [
-                    Tab(text: '全部'),
-                    Tab(text: '待支付'),
-                    Tab(text: '进行中'),
-                    Tab(text: '已完成'),
+                  tabs: [
+                    Tab(text: s.tabAll),
+                    Tab(text: s.tabUnpaid),
+                    Tab(text: s.tabInProgress),
+                    Tab(text: s.tabCompleted),
                   ],
                 ),
               ),
@@ -96,7 +98,7 @@ class _UserOrdersPageState extends State<UserOrdersPage>
               ),
               const SizedBox(height: 12),
               Text(
-                _emptyTitle(tab),
+                _emptyTitle(context, tab),
                 style: const TextStyle(
                   fontWeight: FontWeight.w800,
                   fontSize: 16,
@@ -105,7 +107,7 @@ class _UserOrdersPageState extends State<UserOrdersPage>
               ),
               const SizedBox(height: 8),
               Text(
-                _emptyHint(tab),
+                _emptyHint(context, tab),
                 style: const TextStyle(color: AppColors.textSecondary),
                 textAlign: TextAlign.center,
               ),
@@ -148,24 +150,31 @@ class _UserOrdersPageState extends State<UserOrdersPage>
     return result.toList()..sort((a, b) => b.createdAt.compareTo(a.createdAt));
   }
 
-  String _emptyTitle(_UserOrderTab tab) => switch (tab) {
-        _UserOrderTab.all => '还没有订单',
-        _UserOrderTab.unpaid => '暂无待支付订单',
-        _UserOrderTab.inProgress => '暂无进行中订单',
-        _UserOrderTab.completed => '暂无已完成订单',
-      };
+  String _emptyTitle(BuildContext context, _UserOrderTab tab) {
+    final s = context.s;
+    return switch (tab) {
+      _UserOrderTab.all => s.noOrdersAll,
+      _UserOrderTab.unpaid => s.noOrdersUnpaidTitle,
+      _UserOrderTab.inProgress => s.noOrdersInProgressTitle,
+      _UserOrderTab.completed => s.noOrdersCompletedTitle,
+    };
+  }
 
-  String _emptyHint(_UserOrderTab tab) => switch (tab) {
-        _UserOrderTab.all => '在洗车页扫码支付后即可在此查看',
-        _UserOrderTab.unpaid => '创建订单后未支付会显示在这里',
-        _UserOrderTab.inProgress => '支付后正在洗车的订单会显示在这里',
-        _UserOrderTab.completed => '洗完或已退款的订单会显示在这里',
-      };
+  String _emptyHint(BuildContext context, _UserOrderTab tab) {
+    final s = context.s;
+    return switch (tab) {
+      _UserOrderTab.all => s.noOrdersAllHint,
+      _UserOrderTab.unpaid => s.noOrdersUnpaidHint,
+      _UserOrderTab.inProgress => s.noOrdersInProgressHint,
+      _UserOrderTab.completed => s.noOrdersCompletedHint,
+    };
+  }
 }
 
 class _OrdersHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
+    final s = context.s;
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(16, 20, 16, 16),
@@ -178,21 +187,21 @@ class _OrdersHeader extends StatelessWidget {
           bottomRight: Radius.circular(20),
         ),
       ),
-      child: const Column(
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            '我的订单',
-            style: TextStyle(
+            s.myOrdersTitle,
+            style: const TextStyle(
               color: Colors.white,
               fontSize: 22,
               fontWeight: FontWeight.w800,
             ),
           ),
-          SizedBox(height: 6),
+          const SizedBox(height: 6),
           Text(
-            '自助洗车订单',
-            style: TextStyle(color: Colors.white70),
+            s.selfServiceOrdersSubtitle,
+            style: const TextStyle(color: Colors.white70),
           ),
         ],
       ),

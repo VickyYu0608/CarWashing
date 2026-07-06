@@ -1,3 +1,4 @@
+import 'package:car_washing_app/l10n/locale_controller.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -15,6 +16,7 @@ class ShareReferralPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final s = context.s;
     if (!canShare) {
       return Card(
         child: Padding(
@@ -27,20 +29,20 @@ class ShareReferralPanel extends StatelessWidget {
                   Icon(Icons.card_giftcard,
                       color: Theme.of(context).colorScheme.primary),
                   const SizedBox(width: 8),
-                  const Text(
-                    '分享有礼',
-                    style: TextStyle(fontWeight: FontWeight.w800),
+                  Text(
+                    s.shareGiftTitle,
+                    style: const TextStyle(fontWeight: FontWeight.w800),
                   ),
                 ],
               ),
               const SizedBox(height: 8),
-              const Text(
-                '完成首次洗车后，即可分享专属邀请码给好友。您和好友各获得 1 次免费洗车机会。',
-                style: TextStyle(fontSize: 13, height: 1.4),
+              Text(
+                s.shareBeforeFirstWash,
+                style: const TextStyle(fontSize: 13, height: 1.4),
               ),
               if (freeWashCredits > 0) ...[
                 const SizedBox(height: 8),
-                Text('当前免费洗车次数：$freeWashCredits'),
+                Text(s.currentFreeWashCountLine(freeWashCredits)),
               ],
             ],
           ),
@@ -48,8 +50,7 @@ class ShareReferralPanel extends StatelessWidget {
       );
     }
 
-    final message =
-        '我在「清洗到家」洗过车了，邀请你一起来！注册时填写我的分享码 $shareCode，我们各得 1 次免费洗车。';
+    final message = s.shareMessage(shareCode);
 
     return Card(
       color: Theme.of(context).colorScheme.primaryContainer,
@@ -64,7 +65,7 @@ class ShareReferralPanel extends StatelessWidget {
                     color: Theme.of(context).colorScheme.onPrimaryContainer),
                 const SizedBox(width: 8),
                 Text(
-                  '分享给好友',
+                  s.shareToFriends,
                   style: TextStyle(
                     fontWeight: FontWeight.w800,
                     color: Theme.of(context).colorScheme.onPrimaryContainer,
@@ -74,7 +75,7 @@ class ShareReferralPanel extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text(
-              '您的分享码：$shareCode',
+              s.yourShareCodeLine(shareCode),
               style: const TextStyle(
                 fontSize: 20,
                 fontWeight: FontWeight.w800,
@@ -83,7 +84,7 @@ class ShareReferralPanel extends StatelessWidget {
             ),
             const SizedBox(height: 6),
             Text(
-              '好友注册或在我的页面填写分享码后，双方各得 1 次免费洗车。',
+              s.shareCodeBenefit,
               style: TextStyle(
                 fontSize: 13,
                 height: 1.4,
@@ -92,7 +93,7 @@ class ShareReferralPanel extends StatelessWidget {
             ),
             if (freeWashCredits > 0) ...[
               const SizedBox(height: 6),
-              Text('当前可用免费洗车：$freeWashCredits 次'),
+              Text(s.currentFreeWashAvailable(freeWashCredits)),
             ],
             const SizedBox(height: 12),
             Wrap(
@@ -104,24 +105,24 @@ class ShareReferralPanel extends StatelessWidget {
                     await Clipboard.setData(ClipboardData(text: shareCode));
                     if (context.mounted) {
                       ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('分享码已复制')),
+                        SnackBar(content: Text(s.shareCodeCopied)),
                       );
                     }
                   },
                   icon: const Icon(Icons.copy),
-                  label: const Text('复制分享码'),
+                  label: Text(s.copyShareCode),
                 ),
                 FilledButton.tonalIcon(
                   onPressed: () async {
                     await Clipboard.setData(ClipboardData(text: message));
                     if (context.mounted) {
                       ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('分享文案已复制，可粘贴给好友')),
+                        SnackBar(content: Text(s.shareTextCopied)),
                       );
                     }
                   },
                   icon: const Icon(Icons.message_outlined),
-                  label: const Text('复制分享文案'),
+                  label: Text(s.copyShareText),
                 ),
               ],
             ),
@@ -172,8 +173,8 @@ class _ReferralProfileSectionState extends State<ReferralProfileSection> {
 
   @override
   Widget build(BuildContext context) {
-    final message =
-        '我在「清洗到家」洗过车了，邀请你一起来！注册时填写我的分享码 ${widget.shareCode}，我们各得 1 次免费洗车。';
+    final s = context.s;
+    final message = s.shareMessage(widget.shareCode);
 
     return Card(
       child: Padding(
@@ -181,13 +182,13 @@ class _ReferralProfileSectionState extends State<ReferralProfileSection> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('分享与免费洗车', style: TextStyle(fontWeight: FontWeight.w800)),
+            Text(s.shareAndFreeWash, style: const TextStyle(fontWeight: FontWeight.w800)),
             const SizedBox(height: 12),
             Row(
               children: [
                 Expanded(
                   child: _StatTile(
-                    label: '剩余次数',
+                    label: s.remainingCountLabel,
                     value: '${widget.freeWashCredits}',
                     icon: Icons.card_giftcard,
                   ),
@@ -195,7 +196,7 @@ class _ReferralProfileSectionState extends State<ReferralProfileSection> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: _StatTile(
-                    label: '已使用',
+                    label: s.usedCountLabel,
                     value: '${widget.freeWashUsedCount}',
                     icon: Icons.local_car_wash_outlined,
                   ),
@@ -203,7 +204,7 @@ class _ReferralProfileSectionState extends State<ReferralProfileSection> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: _StatTile(
-                    label: '分享成功',
+                    label: s.shareSuccessCountLabel,
                     value: '${widget.referralSuccessCount}',
                     icon: Icons.people_outline,
                   ),
@@ -213,7 +214,7 @@ class _ReferralProfileSectionState extends State<ReferralProfileSection> {
             const SizedBox(height: 16),
             if (widget.canShare) ...[
               Text(
-                '我的分享码：${widget.shareCode}',
+                s.myShareCodeLine(widget.shareCode),
                 style: const TextStyle(
                   fontSize: 18,
                   fontWeight: FontWeight.w800,
@@ -221,9 +222,9 @@ class _ReferralProfileSectionState extends State<ReferralProfileSection> {
                 ),
               ),
               const SizedBox(height: 8),
-              const Text(
-                '分享给好友，双方各得 1 次免费洗车。好友可在注册时填写，或在下方兑换。',
-                style: TextStyle(fontSize: 13, height: 1.4),
+              Text(
+                s.shareBenefitDetail,
+                style: const TextStyle(fontSize: 13, height: 1.4),
               ),
               const SizedBox(height: 12),
               Wrap(
@@ -237,45 +238,45 @@ class _ReferralProfileSectionState extends State<ReferralProfileSection> {
                       );
                       if (context.mounted) {
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('分享码已复制')),
+                          SnackBar(content: Text(s.shareCodeCopied)),
                         );
                       }
                     },
                     icon: const Icon(Icons.copy),
-                    label: const Text('复制分享码'),
+                    label: Text(s.copyShareCode),
                   ),
                   FilledButton.tonalIcon(
                     onPressed: () async {
                       await Clipboard.setData(ClipboardData(text: message));
                       if (context.mounted) {
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('分享文案已复制，可粘贴给好友')),
+                          SnackBar(content: Text(s.shareTextCopied)),
                         );
                       }
                     },
                     icon: const Icon(Icons.message_outlined),
-                    label: const Text('复制分享文案'),
+                    label: Text(s.copyShareText),
                   ),
                 ],
               ),
             ] else ...[
-              const Text(
-                '完成首次洗车后，即可分享专属邀请码给好友，双方各得 1 次免费洗车。',
-                style: TextStyle(fontSize: 13, height: 1.4),
+              Text(
+                s.shareBeforeFirstWash,
+                style: const TextStyle(fontSize: 13, height: 1.4),
               ),
               const SizedBox(height: 8),
               Text(
-                '分享码：${widget.shareCode}',
+                s.shareCodeShort(widget.shareCode),
                 style: TextStyle(color: Theme.of(context).disabledColor),
               ),
             ],
             if (widget.referredByName != null) ...[
               const SizedBox(height: 12),
-              Text('通过分享码注册，邀请人：${widget.referredByName}'),
+              Text(s.referredByLine(widget.referredByName!)),
             ],
             if (widget.referredUsers.isNotEmpty) ...[
               const SizedBox(height: 8),
-              const Text('已邀请好友：', style: TextStyle(fontWeight: FontWeight.w600)),
+              Text(s.invitedFriends, style: const TextStyle(fontWeight: FontWeight.w600)),
               const SizedBox(height: 4),
               for (final name in widget.referredUsers)
                 Text('· $name', style: const TextStyle(fontSize: 13)),
@@ -284,13 +285,13 @@ class _ReferralProfileSectionState extends State<ReferralProfileSection> {
               const SizedBox(height: 16),
               const Divider(),
               const SizedBox(height: 8),
-              const Text('兑换分享码', style: TextStyle(fontWeight: FontWeight.w700)),
+              Text(s.redeemShareCode, style: const TextStyle(fontWeight: FontWeight.w700)),
               const SizedBox(height: 8),
               TextField(
                 controller: codeController,
-                decoration: const InputDecoration(
-                  labelText: '输入好友分享码',
-                  border: OutlineInputBorder(),
+                decoration: InputDecoration(
+                  labelText: s.enterFriendShareCode,
+                  border: const OutlineInputBorder(),
                 ),
               ),
               if (error != null) ...[
@@ -306,7 +307,7 @@ class _ReferralProfileSectionState extends State<ReferralProfileSection> {
                     setState(() => error = null);
                     if (context.mounted) {
                       ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('分享码兑换成功，双方各得 1 次免费洗车')),
+                        SnackBar(content: Text(s.redeemSuccess)),
                       );
                     }
                   } on Object catch (exception) {
@@ -314,7 +315,7 @@ class _ReferralProfileSectionState extends State<ReferralProfileSection> {
                         exception.toString().replaceFirst('Bad state: ', ''));
                   }
                 },
-                child: const Text('兑换分享码'),
+                child: Text(s.redeemShareCodeBtn),
               ),
             ],
           ],

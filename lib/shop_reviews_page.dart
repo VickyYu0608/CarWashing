@@ -1,5 +1,6 @@
 import 'package:car_washing_app/api_client.dart';
 import 'package:car_washing_app/app_theme.dart';
+import 'package:car_washing_app/l10n/locale_controller.dart';
 import 'package:car_washing_app/main.dart';
 import 'package:flutter/material.dart';
 
@@ -34,12 +35,13 @@ class _ShopReviewsPageState extends State<ShopReviewsPage> {
 
   @override
   Widget build(BuildContext context) {
+    final s = context.s;
     return Scaffold(
-      appBar: AppBar(title: const Text('我的评价')),
+      appBar: AppBar(title: Text(s.myReviews)),
       body: loading
           ? const Center(child: CircularProgressIndicator())
           : reviews.isEmpty
-              ? const Center(child: Text('暂无评价'))
+              ? Center(child: Text(s.noReviews))
               : ListView.separated(
                   padding: const EdgeInsets.all(16),
                   itemCount: reviews.length,
@@ -60,7 +62,7 @@ class _ShopReviewsPageState extends State<ShopReviewsPage> {
                                     style: const TextStyle(
                                         fontWeight: FontWeight.w700)),
                                 const Spacer(),
-                                Text('${review['rating']} 星'),
+                                Text(s.starRating(review['rating'] as int)),
                               ],
                             ),
                             const SizedBox(height: 6),
@@ -69,7 +71,7 @@ class _ShopReviewsPageState extends State<ShopReviewsPage> {
                               Padding(
                                 padding: const EdgeInsets.only(top: 8),
                                 child: Text(
-                                  '商家回复：${review['reply']}',
+                                  s.shopReplyPrefix(review['reply'] as String),
                                   style: const TextStyle(
                                     color: AppColors.primaryDark,
                                   ),

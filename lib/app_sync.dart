@@ -4,6 +4,80 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 /// 将后端 JSON 同步到 AppStore
 class AppSync {
+  static List<CarWashStore> parseStores(List<Map<String, dynamic>> items) {
+    final parsed = <CarWashStore>[];
+    for (final json in items) {
+      try {
+        parsed.add(storeFromJson(json));
+      } on Object {
+        // Skip malformed store records instead of failing the whole sync.
+      }
+    }
+    return parsed;
+  }
+
+  static List<WashOrder> parseOrders(List<Map<String, dynamic>> items) {
+    final parsed = <WashOrder>[];
+    for (final json in items) {
+      try {
+        parsed.add(orderFromJson(json));
+      } on Object {
+        // Skip malformed order records.
+      }
+    }
+    return parsed;
+  }
+
+  static List<Reservation> parseReservations(List<Map<String, dynamic>> items) {
+    final parsed = <Reservation>[];
+    for (final json in items) {
+      try {
+        parsed.add(reservationFromJson(json));
+      } on Object {
+        // Skip malformed reservation records.
+      }
+    }
+    return parsed;
+  }
+
+  static List<UserVehicle> parseVehicles(List<Map<String, dynamic>> items) {
+    final parsed = <UserVehicle>[];
+    for (final json in items) {
+      try {
+        parsed.add(vehicleFromJson(json));
+      } on Object {
+        // Skip malformed vehicle records.
+      }
+    }
+    return parsed;
+  }
+
+  static List<UserAddress> parseAddresses(List<Map<String, dynamic>> items) {
+    final parsed = <UserAddress>[];
+    for (final json in items) {
+      try {
+        parsed.add(addressFromJson(json));
+      } on Object {
+        // Skip malformed address records.
+      }
+    }
+    return parsed;
+  }
+
+  static List<WalletTransaction> parseWalletTransactions(
+    List<Map<String, dynamic>> items,
+  ) {
+    final parsed = <WalletTransaction>[];
+    for (final json in items) {
+      try {
+        parsed.add(walletTxnFromJson(json));
+      } on Object {
+        // Skip malformed wallet records.
+      }
+    }
+    return parsed;
+  }
+
   static CarWashStore storeFromJson(Map<String, dynamic> json) {
     final serviceTypes = <WashServiceType>{};
     for (final item in json['service_types'] as List<dynamic>? ?? []) {

@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:car_washing_app/api_config.dart';
 import 'package:car_washing_app/payment/payment_models.dart';
@@ -26,6 +28,7 @@ class ApiConnectionException implements Exception {
 class ApiClient {
   static String? accessToken;
   static bool useBackend = true;
+  static final http.Client _client = http.Client();
 
   static Map<String, String> _headers({bool jsonBody = false}) {
     return {
@@ -55,19 +58,26 @@ class ApiClient {
 
   static Future<T> _request<T>(
     Future<http.Response> Function() call,
-    T Function(http.Response response) onSuccess,
-  ) async {
+    T Function(http.Response response) onSuccess, {
+    Duration timeout = const Duration(seconds: 20),
+  }) async {
     try {
-      final response = await call().timeout(const Duration(seconds: 20));
+      final response = await call().timeout(timeout);
       if (response.statusCode >= 200 && response.statusCode < 300) {
         return onSuccess(response);
       }
       throw ApiException(_readError(response), statusCode: response.statusCode);
     } on ApiException {
       rethrow;
-    } on Object catch (error) {
+    } on TimeoutException {
+      throw ApiConnectionException('请求超时，请检查网络后重试');
+    } on SocketException {
+      throw ApiConnectionException('无法连接服务器（$kApiBaseUrl）');
+    } on FormatException {
+      throw ApiException('服务器返回了无效数据');
+    } on Object {
       throw ApiConnectionException(
-        '无法连接后端（$kApiBaseUrl），请确认服务已启动。$error',
+        '无法连接后端（$kApiBaseUrl），请确认服务已启动。',
       );
     }
   }
@@ -77,7 +87,7 @@ class ApiClient {
     String password,
   ) async {
     return _request(
-      () => http.post(
+      () => _client.post(
         Uri.parse(apiUrl('/api/auth/login')),
         headers: _headers(jsonBody: true),
         body: jsonEncode({
@@ -90,17 +100,19 @@ class ApiClient {
         accessToken = json['access_token'] as String?;
         return json;
       },
+      timeout: const Duration(seconds: 5),
     );
   }
 
   static Future<Map<String, dynamic>> getMe() => _request(
-        () => http.get(Uri.parse(apiUrl('/api/auth/me')), headers: _headers()),
+        () => _client.get(Uri.parse(apiUrl('/api/auth/me')), headers: _headers()),
         (r) => jsonDecode(r.body) as Map<String, dynamic>,
+        timeout: const Duration(seconds: 5),
       );
 
   static Future<Map<String, dynamic>> updateMe(Map<String, dynamic> body) =>
       _request(
-        () => http.patch(
+        () => _client.patch(
           Uri.parse(apiUrl('/api/auth/me')),
           headers: _headers(jsonBody: true),
           body: jsonEncode(body),
@@ -111,18 +123,20 @@ class ApiClient {
   static Future<Map<String, dynamic>> registerUser({
     required String countryCode,
     required String phone,
+    required String email,
     required String verificationCode,
     required String password,
     required String displayName,
     String referralCode = '',
   }) =>
       _request(
-        () => http.post(
+        () => _client.post(
           Uri.parse(apiUrl('/api/auth/register/user')),
           headers: _headers(jsonBody: true),
           body: jsonEncode({
             'country_code': countryCode,
             'phone': phone.trim(),
+            'email': email.trim().toLowerCase(),
             'verification_code': verificationCode.trim(),
             'password': password,
             'display_name': displayName.trim(),
@@ -135,6 +149,7 @@ class ApiClient {
   static Future<Map<String, dynamic>> registerShop({
     required String countryCode,
     required String phone,
+    required String email,
     required String verificationCode,
     required String password,
     required String storeName,
@@ -145,12 +160,13 @@ class ApiClient {
     required List<String> serviceTypes,
   }) =>
       _request(
-        () => http.post(
+        () => _client.post(
           Uri.parse(apiUrl('/api/auth/register/shop')),
           headers: _headers(jsonBody: true),
           body: jsonEncode({
             'country_code': countryCode,
             'phone': phone.trim(),
+            'email': email.trim().toLowerCase(),
             'verification_code': verificationCode.trim(),
             'password': password,
             'store_name': storeName.trim(),
@@ -165,7 +181,7 @@ class ApiClient {
       );
 
   static Future<Map<String, dynamic>> redeemReferral(String code) => _request(
-        () => http.post(
+        () => _client.post(
           Uri.parse(apiUrl('/api/auth/referral/redeem')),
           headers: _headers(jsonBody: true),
           body: jsonEncode({'code': code.trim()}),
@@ -174,7 +190,7 @@ class ApiClient {
       );
 
   static Future<List<Map<String, dynamic>>> fetchAccounts() => _request(
-        () => http.get(
+        () => _client.get(
           Uri.parse(apiUrl('/api/auth/accounts')),
           headers: _headers(),
         ),
@@ -187,7 +203,7 @@ class ApiClient {
     String adminReply = '',
   }) =>
       _request(
-        () => http.patch(
+        () => _client.patch(
           Uri.parse(apiUrl('/api/auth/accounts/$accountId/approval')),
           headers: _headers(jsonBody: true),
           body: jsonEncode({
@@ -199,12 +215,12 @@ class ApiClient {
       );
 
   static Future<List<Map<String, dynamic>>> fetchStores() => _request(
-        () => http.get(Uri.parse(apiUrl('/api/stores')), headers: _headers()),
+        () => _client.get(Uri.parse(apiUrl('/api/stores')), headers: _headers()),
         (r) => (jsonDecode(r.body) as List<dynamic>).cast<Map<String, dynamic>>(),
       );
 
   static Future<List<Map<String, dynamic>>> fetchMyStores() => _request(
-        () => http.get(
+        () => _client.get(
           Uri.parse(apiUrl('/api/stores/mine')),
           headers: _headers(),
         ),
@@ -212,13 +228,13 @@ class ApiClient {
       );
 
   static Future<List<Map<String, dynamic>>> fetchOrders() => _request(
-        () => http.get(Uri.parse(apiUrl('/api/orders')), headers: _headers()),
+        () => _client.get(Uri.parse(apiUrl('/api/orders')), headers: _headers()),
         (r) => (jsonDecode(r.body) as List<dynamic>).cast<Map<String, dynamic>>(),
       );
 
   static Future<Map<String, dynamic>> createOrder(Map<String, dynamic> body) =>
       _request(
-        () => http.post(
+        () => _client.post(
           Uri.parse(apiUrl('/api/orders')),
           headers: _headers(jsonBody: true),
           body: jsonEncode(body),
@@ -231,7 +247,7 @@ class ApiClient {
     Map<String, dynamic> body,
   ) =>
       _request(
-        () => http.patch(
+        () => _client.patch(
           Uri.parse(apiUrl('/api/orders/$orderId')),
           headers: _headers(jsonBody: true),
           body: jsonEncode(body),
@@ -246,7 +262,7 @@ class ApiClient {
     required String intentId,
   }) =>
       _request(
-        () => http.post(
+        () => _client.post(
           Uri.parse(apiUrl('/api/payments/wechat/prepay')),
           headers: _headers(jsonBody: true),
           body: jsonEncode({
@@ -266,7 +282,7 @@ class ApiClient {
     required String intentId,
   }) =>
       _request(
-        () => http.post(
+        () => _client.post(
           Uri.parse(apiUrl('/api/payments/alipay/prepay')),
           headers: _headers(jsonBody: true),
           body: jsonEncode({
@@ -280,7 +296,7 @@ class ApiClient {
       );
 
   static Future<Map<String, dynamic>> fetchPaymentConfig() => _request(
-        () => http.get(
+        () => _client.get(
           Uri.parse(apiUrl('/api/payments/config')),
           headers: _headers(),
         ),
@@ -295,7 +311,7 @@ class ApiClient {
     required double amount,
   }) =>
       _request(
-        () => http.post(
+        () => _client.post(
           Uri.parse(apiUrl('/api/payments/confirm')),
           headers: _headers(jsonBody: true),
           body: jsonEncode({
@@ -317,7 +333,7 @@ class ApiClient {
       };
 
   static Future<List<Map<String, dynamic>>> fetchReservations() => _request(
-        () => http.get(
+        () => _client.get(
           Uri.parse(apiUrl('/api/reservations')),
           headers: _headers(),
         ),
@@ -328,7 +344,7 @@ class ApiClient {
     Map<String, dynamic> body,
   ) =>
       _request(
-        () => http.post(
+        () => _client.post(
           Uri.parse(apiUrl('/api/reservations')),
           headers: _headers(jsonBody: true),
           body: jsonEncode(body),
@@ -341,7 +357,7 @@ class ApiClient {
     Map<String, dynamic> body,
   ) =>
       _request(
-        () => http.patch(
+        () => _client.patch(
           Uri.parse(apiUrl('/api/reservations/$reservationId')),
           headers: _headers(jsonBody: true),
           body: jsonEncode(body),
@@ -350,12 +366,12 @@ class ApiClient {
       );
 
   static Future<Map<String, dynamic>> fetchWallet() => _request(
-        () => http.get(Uri.parse(apiUrl('/api/wallet')), headers: _headers()),
+        () => _client.get(Uri.parse(apiUrl('/api/wallet')), headers: _headers()),
         (r) => jsonDecode(r.body) as Map<String, dynamic>,
       );
 
   static Future<Map<String, dynamic>> withdrawWallet(double amount) => _request(
-        () => http.post(
+        () => _client.post(
           Uri.parse(apiUrl('/api/wallet/withdraw')),
           headers: _headers(jsonBody: true),
           body: jsonEncode({'amount': amount}),
@@ -364,7 +380,7 @@ class ApiClient {
       );
 
   static Future<List<Map<String, dynamic>>> fetchVehicles() => _request(
-        () => http.get(Uri.parse(apiUrl('/api/vehicles')), headers: _headers()),
+        () => _client.get(Uri.parse(apiUrl('/api/vehicles')), headers: _headers()),
         (r) => (jsonDecode(r.body) as List<dynamic>).cast<Map<String, dynamic>>(),
       );
 
@@ -372,7 +388,7 @@ class ApiClient {
     Map<String, dynamic> body,
   ) =>
       _request(
-        () => http.post(
+        () => _client.post(
           Uri.parse(apiUrl('/api/vehicles')),
           headers: _headers(jsonBody: true),
           body: jsonEncode(body),
@@ -381,7 +397,7 @@ class ApiClient {
       );
 
   static Future<void> deleteVehicle(String vehicleId) => _request(
-        () => http.delete(
+        () => _client.delete(
           Uri.parse(apiUrl('/api/vehicles/$vehicleId')),
           headers: _headers(),
         ),
@@ -389,7 +405,7 @@ class ApiClient {
       );
 
   static Future<List<Map<String, dynamic>>> fetchAddresses() => _request(
-        () => http.get(
+        () => _client.get(
           Uri.parse(apiUrl('/api/addresses')),
           headers: _headers(),
         ),
@@ -400,7 +416,7 @@ class ApiClient {
     Map<String, dynamic> body,
   ) =>
       _request(
-        () => http.post(
+        () => _client.post(
           Uri.parse(apiUrl('/api/addresses')),
           headers: _headers(jsonBody: true),
           body: jsonEncode(body),
@@ -409,7 +425,7 @@ class ApiClient {
       );
 
   static Future<void> deleteAddress(String addressId) => _request(
-        () => http.delete(
+        () => _client.delete(
           Uri.parse(apiUrl('/api/addresses/$addressId')),
           headers: _headers(),
         ),
@@ -417,7 +433,7 @@ class ApiClient {
       );
 
   static Future<List<Map<String, dynamic>>> fetchReviews() => _request(
-        () => http.get(Uri.parse(apiUrl('/api/reviews')), headers: _headers()),
+        () => _client.get(Uri.parse(apiUrl('/api/reviews')), headers: _headers()),
         (r) => (jsonDecode(r.body) as List<dynamic>).cast<Map<String, dynamic>>(),
       );
 
@@ -432,31 +448,35 @@ class ApiClient {
     }
   }
 
-  static Future<Map<String, dynamic>> sendSmsCode({
-    required String countryCode,
-    required String phone,
-    String purpose = 'register',
-  }) =>
-      _request(
-        () => http.post(
-          Uri.parse(apiUrl('/api/auth/sms/send')),
-          headers: _headers(jsonBody: true),
-          body: jsonEncode({
-            'country_code': countryCode,
-            'phone': phone.trim(),
-            'purpose': purpose,
-          }),
-        ),
-        (r) => jsonDecode(r.body) as Map<String, dynamic>,
-      );
+  static Future<Map<String, dynamic>> sendEmailCode({
+    required String email,
+    String purpose = 'register_user',
+  }) {
+    if (!useBackend) {
+      return Future.value({
+        'message': 'Local demo mode',
+      });
+    }
+    return _request(
+      () => _client.post(
+        Uri.parse(apiUrl('/api/auth/email/send')),
+        headers: _headers(jsonBody: true),
+        body: jsonEncode({
+          'email': email.trim().toLowerCase(),
+          'purpose': purpose,
+        }),
+      ),
+      (r) => jsonDecode(r.body) as Map<String, dynamic>,
+    );
+  }
 
   static Future<List<Map<String, dynamic>>> fetchBundles() => _request(
-        () => http.get(Uri.parse(apiUrl('/api/bundles')), headers: _headers()),
+        () => _client.get(Uri.parse(apiUrl('/api/bundles')), headers: _headers()),
         (r) => (jsonDecode(r.body) as List<dynamic>).cast<Map<String, dynamic>>(),
       );
 
   static Future<Map<String, dynamic>> purchaseBundle(String planId) => _request(
-        () => http.post(
+        () => _client.post(
           Uri.parse(apiUrl('/api/bundles/purchase')),
           headers: _headers(jsonBody: true),
           body: jsonEncode({'plan_id': planId}),
@@ -465,7 +485,7 @@ class ApiClient {
       );
 
   static Future<Map<String, dynamic>> fetchAdminPending() => _request(
-        () => http.get(
+        () => _client.get(
           Uri.parse(apiUrl('/api/admin/pending')),
           headers: _headers(),
         ),
@@ -478,7 +498,7 @@ class ApiClient {
     String adminReply = '',
   }) =>
       _request(
-        () => http.patch(
+        () => _client.patch(
           Uri.parse(apiUrl('/api/admin/stores/$storeId/approval')),
           headers: _headers(jsonBody: true),
           body: jsonEncode({
@@ -491,7 +511,7 @@ class ApiClient {
 
   static Future<Map<String, dynamic>> createStore(Map<String, dynamic> body) =>
       _request(
-        () => http.post(
+        () => _client.post(
           Uri.parse(apiUrl('/api/stores')),
           headers: _headers(jsonBody: true),
           body: jsonEncode(body),
@@ -505,7 +525,7 @@ class ApiClient {
     Map<String, dynamic> body,
   ) =>
       _request(
-        () => http.patch(
+        () => _client.patch(
           Uri.parse(apiUrl('/api/stores/$storeId/packages/$packageId')),
           headers: _headers(jsonBody: true),
           body: jsonEncode(body),
@@ -518,7 +538,7 @@ class ApiClient {
     Map<String, dynamic> body,
   ) =>
       _request(
-        () => http.patch(
+        () => _client.patch(
           Uri.parse(apiUrl('/api/bundles/$planId')),
           headers: _headers(jsonBody: true),
           body: jsonEncode(body),

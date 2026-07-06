@@ -23,7 +23,14 @@ import 'package:car_washing_app/user_profile_page.dart';
 import 'package:car_washing_app/qr_scan_page.dart';
 import 'package:car_washing_app/admin_approval_page.dart';
 import 'package:car_washing_app/admin_pricing_page.dart';
+import 'package:car_washing_app/bundle_purchase_page.dart';
+import 'package:car_washing_app/l10n/app_locale.dart';
+import 'package:car_washing_app/l10n/app_strings.dart';
+import 'package:car_washing_app/l10n/locale_controller.dart';
+import 'package:car_washing_app/l10n/localized_catalog.dart';
+import 'package:car_washing_app/widgets/language_switcher.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -43,22 +50,44 @@ class CarWashingApp extends StatefulWidget {
 
 class _CarWashingAppState extends State<CarWashingApp> {
   final AppStore store = AppStore.seeded();
+  final LocaleController localeController = LocaleController();
 
   @override
   void dispose() {
     store.dispose();
+    localeController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return AppScope(
-      store: store,
-      child: MaterialApp(
-        debugShowCheckedModeBanner: false,
-        title: '清洗到家',
-        theme: buildAppTheme(),
-        home: const AuthGate(),
+    return LocaleScope(
+      controller: localeController,
+      child: AppScope(
+        store: store,
+        child: ListenableBuilder(
+          listenable: localeController,
+          builder: (context, _) {
+            final s = localeController.strings;
+            return MaterialApp(
+              debugShowCheckedModeBanner: false,
+              title: s.appTitle,
+              theme: buildAppTheme(),
+              locale: localeController.flutterLocale,
+              supportedLocales: const [
+                Locale('en'),
+                Locale('zh', 'CN'),
+                Locale('zh', 'TW'),
+              ],
+              localizationsDelegates: const [
+                GlobalMaterialLocalizations.delegate,
+                GlobalWidgetsLocalizations.delegate,
+                GlobalCupertinoLocalizations.delegate,
+              ],
+              home: const AuthGate(),
+            );
+          },
+        ),
       ),
     );
   }
@@ -302,15 +331,22 @@ class AppStore extends ChangeNotifier {
   AppAccount? currentAccount;
   String? lastReservationPhone;
   String? lastAuthMessage;
+  bool isSyncing = false;
+  String? lastSyncError;
+  final ValueNotifier<int> orderTick = ValueNotifier(0);
   Timer? _washTimer;
 
   Future<bool> login(String username, String password) async {
     lastAuthMessage = null;
+    final trimmed = username.trim();
+    if (trimmed == 'user' || trimmed == 'shop' || trimmed == 'admin') {
+      return _loginLocal(trimmed, password);
+    }
     if (!_shouldUseBackendApi()) {
-      return _loginLocal(username, password);
+      return _loginLocal(trimmed, password);
     }
     try {
-      await ApiClient.login(username.trim(), password);
+      await ApiClient.login(trimmed, password);
       final me = await ApiClient.getMe();
       final account = _upsertAccountFromApi(me, password: password);
       if (account.approvalStatus != ApprovalStatus.approved) {
@@ -320,17 +356,17 @@ class AppStore extends ChangeNotifier {
           return true;
         }
         lastAuthMessage = account.approvalStatus == ApprovalStatus.pending
-            ? '账号正在等待平台审核'
-            : '账号审核未通过，请联系平台管理员';
+            ? AppStrings.current.accountPending
+            : AppStrings.current.accountRejected;
         notifyListeners();
         return false;
       }
       currentAccount = account;
       lastReservationPhone ??= account.phone;
       if (account.role == AccountRole.admin) {
-        await syncAccountsFromBackend();
+        unawaited(syncAccountsFromBackend());
       } else {
-        await syncFromBackend();
+        unawaited(syncFromBackend());
       }
       notifyListeners();
       return true;
@@ -339,7 +375,9 @@ class AppStore extends ChangeNotifier {
       notifyListeners();
       return false;
     } on ApiConnectionException {
-      return _loginLocal(username, password);
+      lastAuthMessage = AppStrings.current.backendUnreachable;
+      notifyListeners();
+      return false;
     }
   }
 
@@ -354,8 +392,8 @@ class AppStore extends ChangeNotifier {
             return true;
           } else {
             lastAuthMessage = account.approvalStatus == ApprovalStatus.pending
-                ? '账号正在等待平台审核'
-                : '账号审核未通过，请联系平台管理员';
+                ? AppStrings.current.accountPending
+                : AppStrings.current.accountRejected;
             notifyListeners();
             return false;
           }
@@ -366,40 +404,50 @@ class AppStore extends ChangeNotifier {
         return true;
       }
     }
-    lastAuthMessage = '账号或密码不匹配';
+    lastAuthMessage = AppStrings.current.accountMismatch;
     return false;
   }
 
   Future<void> syncFromBackend() async {
-    if (ApiClient.accessToken == null || currentAccount == null) {
+    if (ApiClient.accessToken == null || currentAccount == null || isSyncing) {
       return;
     }
+    isSyncing = true;
+    lastSyncError = null;
+    notifyListeners();
     try {
       final account = currentAccount!;
-      final storeJson = account.role == AccountRole.shop
-          ? await ApiClient.fetchMyStores()
-          : await ApiClient.fetchStores();
+      final storeFuture = account.role == AccountRole.shop
+          ? ApiClient.fetchMyStores()
+          : ApiClient.fetchStores();
+      final results = await Future.wait([
+        storeFuture,
+        ApiClient.fetchOrders(),
+        ApiClient.fetchReservations(),
+      ]);
+      final storeJson = results[0];
+      final orderJson = results[1];
+      final resJson = results[2];
+
       stores
         ..clear()
-        ..addAll(storeJson.map(AppSync.storeFromJson));
-
-      final orderJson = await ApiClient.fetchOrders();
+        ..addAll(AppSync.parseStores(storeJson));
       orders
         ..clear()
-        ..addAll(orderJson.map(AppSync.orderFromJson));
-
-      final resJson = await ApiClient.fetchReservations();
+        ..addAll(AppSync.parseOrders(orderJson));
       reservations
         ..clear()
-        ..addAll(resJson.map(AppSync.reservationFromJson));
+        ..addAll(AppSync.parseReservations(resJson));
 
       if (account.role == AccountRole.user) {
-        final vehicles = await ApiClient.fetchVehicles();
+        final profileResults = await Future.wait([
+          ApiClient.fetchVehicles(),
+          ApiClient.fetchAddresses(),
+        ]);
         userVehicles[account.id] =
-            vehicles.map(AppSync.vehicleFromJson).toList();
-        final addresses = await ApiClient.fetchAddresses();
+            AppSync.parseVehicles(profileResults[0]);
         userAddresses[account.id] =
-            addresses.map(AppSync.addressFromJson).toList();
+            AppSync.parseAddresses(profileResults[1]);
       }
 
       if (account.role == AccountRole.shop) {
@@ -409,18 +457,22 @@ class AppStore extends ChangeNotifier {
         walletTransactions
           ..clear()
           ..addAll(
-            (wallet['transactions'] as List<dynamic>? ?? [])
-                .map(
-                  (item) => AppSync.walletTxnFromJson(
-                    item as Map<String, dynamic>,
-                  ),
-                )
-                .toList(),
+            AppSync.parseWalletTransactions(
+              (wallet['transactions'] as List<dynamic>? ?? [])
+                  .cast<Map<String, dynamic>>(),
+            ),
           );
       }
+      lastSyncError = null;
+    } on ApiException catch (exception) {
+      lastSyncError = exception.message;
+    } on ApiConnectionException catch (exception) {
+      lastSyncError = exception.message;
+    } on Object catch (error) {
+      lastSyncError = error.toString();
+    } finally {
+      isSyncing = false;
       notifyListeners();
-    } on Object {
-      // Keep local data if sync fails.
     }
   }
 
@@ -572,6 +624,82 @@ class AppStore extends ChangeNotifier {
     return ApiClient.useBackend;
   }
 
+  static const List<Map<String, dynamic>> bundlePlanSpecs = [
+    {
+      'id': 'single',
+      'wash_count': 1,
+      'price': 50,
+    },
+    {
+      'id': 'pack10',
+      'wash_count': 10,
+      'price': 450,
+    },
+    {
+      'id': 'pack20',
+      'wash_count': 20,
+      'price': 850,
+    },
+  ];
+
+  /// Locale-neutral bundle specs; use [LocalizedCatalog] for display text.
+  static List<Map<String, dynamic>> get defaultBundlePlans => bundlePlanSpecs;
+
+  Future<Map<String, dynamic>> purchaseBundle(
+    String planId, {
+    String? transactionId,
+    String? paymentMethod,
+  }) async {
+    final account = currentAccount;
+    if (account == null || account.role != AccountRole.user) {
+      throw StateError(AppStrings.current.errLoginAsUser);
+    }
+    final plan = defaultBundlePlans.cast<Map<String, dynamic>>().firstWhere(
+          (candidate) => candidate['id'] == planId,
+          orElse: () => throw StateError(AppStrings.current.errPackageNotFound),
+        );
+    final washCount = plan['wash_count'] as int;
+
+    if (_shouldUseBackendApi() && ApiClient.accessToken != null) {
+      try {
+        final result = await ApiClient.purchaseBundle(planId);
+        account.prepaidWashCredits =
+            result['prepaid_wash_credits'] as int? ?? account.prepaidWashCredits;
+        notifyListeners();
+        return {
+          ...result,
+          if (transactionId != null) 'transaction_id': transactionId,
+          if (paymentMethod != null) 'payment_method': paymentMethod,
+        };
+      } on ApiConnectionException {
+        // Fall back to local purchase when backend is unavailable.
+      }
+    }
+
+    account.prepaidWashCredits += washCount;
+    notifyListeners();
+    return {
+      'prepaid_wash_credits': account.prepaidWashCredits,
+      'wash_count_added': washCount,
+      if (transactionId != null) 'transaction_id': transactionId,
+      if (paymentMethod != null) 'payment_method': paymentMethod,
+    };
+  }
+
+  Future<List<Map<String, dynamic>>> fetchBundlePlans() async {
+    if (!shouldFetchBundlePlansFromBackend) {
+      return defaultBundlePlans;
+    }
+    try {
+      return await ApiClient.fetchBundles();
+    } on Object {
+      return defaultBundlePlans;
+    }
+  }
+
+  bool get shouldFetchBundlePlansFromBackend =>
+      _shouldUseBackendApi() && ApiClient.accessToken != null;
+
   void logout() {
     currentAccount = null;
     ApiClient.accessToken = null;
@@ -581,6 +709,7 @@ class AppStore extends ChangeNotifier {
   Future<AppAccount> registerUser({
     required String countryCode,
     required String phone,
+    required String email,
     required String verificationCode,
     required String password,
     required String displayName,
@@ -590,6 +719,7 @@ class AppStore extends ChangeNotifier {
       return _registerUserLocal(
         countryCode: countryCode,
         phone: phone,
+        email: email,
         verificationCode: verificationCode,
         password: password,
         displayName: displayName,
@@ -600,6 +730,7 @@ class AppStore extends ChangeNotifier {
       final data = await ApiClient.registerUser(
         countryCode: countryCode,
         phone: phone,
+        email: email,
         verificationCode: verificationCode,
         password: password,
         displayName: displayName,
@@ -614,6 +745,7 @@ class AppStore extends ChangeNotifier {
       return _registerUserLocal(
         countryCode: countryCode,
         phone: phone,
+        email: email,
         verificationCode: verificationCode,
         password: password,
         displayName: displayName,
@@ -625,17 +757,21 @@ class AppStore extends ChangeNotifier {
   AppAccount _registerUserLocal({
     required String countryCode,
     required String phone,
+    required String email,
     required String verificationCode,
     required String password,
     required String displayName,
     String referralCode = '',
   }) {
+    if (email.trim().isEmpty) {
+      throw StateError(AppStrings.current.errFillEmail);
+    }
     if (verificationCode.trim() != '0000') {
-      throw StateError('验证码错误，测试阶段请填写 0000');
+      throw StateError(AppStrings.current.errSmsCode0000);
     }
     final normalizedPhone = phone.trim();
     if (normalizedPhone.isEmpty) {
-      throw StateError('请填写手机号');
+      throw StateError(AppStrings.current.errFillPhone);
     }
     final username = '$countryCode$normalizedPhone';
     _ensureUniqueUsername(username);
@@ -660,6 +796,7 @@ class AppStore extends ChangeNotifier {
   Future<AppAccount> registerShop({
     required String countryCode,
     required String phone,
+    required String email,
     required String verificationCode,
     required String password,
     required String storeName,
@@ -669,17 +806,21 @@ class AppStore extends ChangeNotifier {
     required List<String> licenseFiles,
     required Set<WashServiceType> serviceTypes,
   }) async {
-    if (verificationCode.trim() != '1111') {
-      throw StateError('验证码错误，测试阶段请填写 1111');
+    if (email.trim().isEmpty) {
+      throw StateError(AppStrings.current.errFillEmail);
     }
     if (licenseFiles.isEmpty) {
-      throw StateError('请上传至少一个经营许可证文件');
+      throw StateError(AppStrings.current.errUploadLicense);
     }
 
     if (!_shouldUseBackendApi()) {
+      if (verificationCode.trim() != '1111') {
+        throw StateError(AppStrings.current.errSmsCode1111);
+      }
       return _registerShopLocal(
         countryCode: countryCode,
         phone: phone,
+        email: email,
         verificationCode: verificationCode,
         password: password,
         storeName: storeName,
@@ -695,6 +836,7 @@ class AppStore extends ChangeNotifier {
       final data = await ApiClient.registerShop(
         countryCode: countryCode,
         phone: phone,
+        email: email,
         verificationCode: verificationCode,
         password: password,
         storeName: storeName,
@@ -738,6 +880,7 @@ class AppStore extends ChangeNotifier {
       return _registerShopLocal(
         countryCode: countryCode,
         phone: phone,
+        email: email,
         verificationCode: verificationCode,
         password: password,
         storeName: storeName,
@@ -753,6 +896,7 @@ class AppStore extends ChangeNotifier {
   AppAccount _registerShopLocal({
     required String countryCode,
     required String phone,
+    required String email,
     required String verificationCode,
     required String password,
     required String storeName,
@@ -763,10 +907,10 @@ class AppStore extends ChangeNotifier {
     required Set<WashServiceType> serviceTypes,
   }) {
     if (verificationCode.trim() != '1111') {
-      throw StateError('验证码错误，测试阶段请填写 1111');
+      throw StateError(AppStrings.current.errSmsCode1111);
     }
     if (licenseFiles.isEmpty) {
-      throw StateError('请上传至少一个经营许可证文件');
+      throw StateError(AppStrings.current.errUploadLicense);
     }
     final username = '$countryCode${phone.trim()}';
     _ensureUniqueUsername(username);
@@ -844,10 +988,10 @@ class AppStore extends ChangeNotifier {
     required Set<WashServiceType> serviceTypes,
   }) {
     if (account.role != AccountRole.shop) {
-      throw StateError('只有商家账号可以重新提交材料');
+      throw StateError(AppStrings.current.errShopOnlyResubmit);
     }
     if (licenseFiles.isEmpty) {
-      throw StateError('请上传至少一个经营许可证文件');
+      throw StateError(AppStrings.current.errUploadLicense);
     }
     account.displayName = storeName.trim();
     account.shopAddress = address.trim();
@@ -855,7 +999,7 @@ class AppStore extends ChangeNotifier {
     account.shopLongitude = longitude;
     account.licenseFiles = [...licenseFiles];
     account.approvalStatus = ApprovalStatus.pending;
-    account.adminReply = '已重新提交材料，等待 Admin 审核。';
+    account.adminReply = AppStrings.current.materialsResubmittedAdminReply;
     final store =
         stores.firstWhere((store) => store.ownerAccountId == account.id);
     store.name = storeName.trim();
@@ -876,10 +1020,10 @@ class AppStore extends ChangeNotifier {
   }) async {
     final account = currentAccount;
     if (account == null || account.role != AccountRole.shop) {
-      throw StateError('请先以商家账号登录');
+      throw StateError(AppStrings.current.errLoginAsShop);
     }
     if (licenseFiles.isEmpty) {
-      throw StateError('请上传至少一个经营许可证文件');
+      throw StateError(AppStrings.current.errUploadLicense);
     }
     if (_shouldUseBackendApi() && ApiClient.accessToken != null) {
       final json = await ApiClient.createStore({
@@ -938,7 +1082,7 @@ class AppStore extends ChangeNotifier {
     }
     final pkgIdx = store.packages.indexWhere((p) => p.id == packageId);
     if (pkgIdx < 0) {
-      throw StateError('套餐不存在');
+      throw StateError(AppStrings.current.errPackageNotFound);
     }
     final old = store.packages[pkgIdx];
     store.packages[pkgIdx] = ServicePackage(
@@ -962,10 +1106,10 @@ class AppStore extends ChangeNotifier {
     required List<String> licenseFiles,
   }) {
     if (account.role != AccountRole.shop) {
-      throw StateError('只有商家账号可以修改个人信息');
+      throw StateError(AppStrings.current.errShopOnlyEditProfile);
     }
     if (licenseFiles.isEmpty) {
-      throw StateError('请上传至少一个经营许可证文件');
+      throw StateError(AppStrings.current.errUploadLicense);
     }
     final normalizedUsername = username.trim();
     final normalizedPhone = phone.trim();
@@ -973,7 +1117,7 @@ class AppStore extends ChangeNotifier {
         normalizedPhone.isEmpty ||
         displayName.trim().isEmpty ||
         address.trim().isEmpty) {
-      throw StateError('请填写完整信息');
+      throw StateError(AppStrings.current.errFillComplete);
     }
     if (normalizedUsername != account.username) {
       _ensureUniqueUsername(normalizedUsername);
@@ -1023,7 +1167,7 @@ class AppStore extends ChangeNotifier {
       (account) => account.username.toLowerCase() == normalized,
     );
     if (exists) {
-      throw StateError('账号已存在，请换一个账号名');
+      throw StateError(AppStrings.current.errAccountExists);
     }
   }
 
@@ -1058,7 +1202,7 @@ class AppStore extends ChangeNotifier {
   Future<void> redeemReferralCode(String code,
       {required AppAccount forAccount}) async {
     if (forAccount.role != AccountRole.user) {
-      throw StateError('只有用户账号可以使用分享码');
+      throw StateError(AppStrings.current.errUserOnlyReferral);
     }
     if (_shouldUseBackendApi() && ApiClient.accessToken != null) {
       final data = await ApiClient.redeemReferral(code);
@@ -1067,14 +1211,14 @@ class AppStore extends ChangeNotifier {
       return;
     }
     if (forAccount.referredByUserId != null) {
-      throw StateError('您已经使用过分享码');
+      throw StateError(AppStrings.current.errReferralUsed);
     }
     final referrer = accountByShareCode(code);
     if (referrer == null) {
-      throw StateError('分享码无效，请检查后重试');
+      throw StateError(AppStrings.current.errReferralInvalid);
     }
     if (referrer.id == forAccount.id) {
-      throw StateError('不能使用自己的分享码');
+      throw StateError(AppStrings.current.errReferralSelf);
     }
     forAccount.referredByUserId = referrer.id;
     referrer.referredUserIds.add(forAccount.id);
@@ -1316,10 +1460,10 @@ class AppStore extends ChangeNotifier {
   Future<bool> withdrawShopWallet(double amount) async {
     final account = currentAccount;
     if (account == null || account.role != AccountRole.shop) {
-      throw StateError('请先以商家身份登录');
+      throw StateError(AppStrings.current.errLoginAsShopMerchant);
     }
     if (amount <= 0) {
-      throw StateError('提现金额必须大于 0');
+      throw StateError(AppStrings.current.errWithdrawPositive);
     }
     if (_shouldUseBackendApi() && ApiClient.accessToken != null) {
       final wallet = await ApiClient.withdrawWallet(amount);
@@ -1341,14 +1485,14 @@ class AppStore extends ChangeNotifier {
     }
     final balance = shopWalletBalance(account.id);
     if (amount > balance) {
-      throw StateError('余额不足');
+      throw StateError(AppStrings.current.errInsufficientBalance);
     }
     shopWalletBalances[account.id] = balance - amount;
     walletTransactions.insert(
       0,
       WalletTransaction(
         id: _newId('txn'),
-        title: '提现到支付宝',
+        title: AppStrings.current.withdrawToAlipay,
         amount: -amount,
         createdAt: DateTime.now(),
       ),
@@ -1408,17 +1552,17 @@ class AppStore extends ChangeNotifier {
   }) async {
     final account = currentAccount;
     if (account == null || account.role != AccountRole.user) {
-      throw StateError('请先以用户身份登录');
+      throw StateError(AppStrings.current.errLoginAsUser);
     }
     final device = deviceByQr(deviceQrCode);
     if (device == null) {
-      throw StateError('没有找到这个设备二维码');
+      throw StateError(AppStrings.current.errDeviceQrNotFound);
     }
     if (device.status != DeviceStatus.idle) {
-      throw StateError('设备当前不可用，请选择空闲设备');
+      throw StateError(AppStrings.current.errDeviceUnavailable);
     }
     if (useFreeWash && usePrepaidWash) {
-      throw StateError('不能同时使用免费次卡和预付次卡');
+      throw StateError(AppStrings.current.errCannotUseBothCredits);
     }
 
     final store = storeForDevice(device.id)!;
@@ -1450,10 +1594,10 @@ class AppStore extends ChangeNotifier {
     }
 
     if (useFreeWash && account.freeWashCredits <= 0) {
-      throw StateError('没有可用的免费洗车次数');
+      throw StateError(AppStrings.current.errNoFreeWash);
     }
     if (usePrepaidWash && account.prepaidWashCredits <= 0) {
-      throw StateError('没有可用的洗车次卡');
+      throw StateError(AppStrings.current.errNoPrepaidWash);
     }
     if (useFreeWash) account.freeWashCredits -= 1;
     if (usePrepaidWash) account.prepaidWashCredits -= 1;
@@ -1483,10 +1627,10 @@ class AppStore extends ChangeNotifier {
   }) async {
     final order = orders.firstWhere(
       (candidate) => candidate.id == orderId,
-      orElse: () => throw StateError('找不到订单'),
+      orElse: () => throw StateError(AppStrings.current.errOrderNotFound),
     );
     if (order.status != OrderStatus.created) {
-      throw StateError('订单状态不可付款');
+      throw StateError(AppStrings.current.errOrderNotPayable);
     }
     order.status = OrderStatus.paid;
     order.paymentTransactionId = transactionId;
@@ -1508,7 +1652,7 @@ class AppStore extends ChangeNotifier {
     await Future<void>.delayed(const Duration(milliseconds: 700));
     if (device.status != DeviceStatus.idle) {
       order.status = OrderStatus.failed;
-      order.failureReason = '设备未处于空闲状态，已进入后台异常处理';
+      order.failureReason = AppStrings.current.errDeviceNotIdle;
       notifyListeners();
       return;
     }
@@ -1559,14 +1703,14 @@ class AppStore extends ChangeNotifier {
   }) async {
     final account = currentAccount;
     if (account == null || account.role != AccountRole.user) {
-      throw StateError('请先以用户身份登录');
+      throw StateError(AppStrings.current.errLoginAsUser);
     }
     final store = storeById(storeId);
     if (!store.serviceTypes.contains(serviceType)) {
-      throw StateError('该店铺不支持这个服务类型');
+      throw StateError(AppStrings.current.errServiceTypeUnsupported);
     }
     if (contactPhone.trim().isEmpty) {
-      throw StateError('请填写联系电话');
+      throw StateError(AppStrings.current.errFillContactPhone);
     }
     final distanceKm = distanceBetweenKm(userLocation, store.position);
     final etaMinutes = estimateEtaMinutes(distanceKm);
@@ -1652,7 +1796,7 @@ class AppStore extends ChangeNotifier {
       if (order.remainingSeconds <= 0) {
         finishOrder(order);
       } else {
-        notifyListeners();
+        orderTick.value++;
       }
     });
   }
@@ -1660,6 +1804,7 @@ class AppStore extends ChangeNotifier {
   @override
   void dispose() {
     _washTimer?.cancel();
+    orderTick.dispose();
     super.dispose();
   }
 
@@ -1907,6 +2052,7 @@ class _AuthPageState extends State<AuthPage> {
   final passwordController = TextEditingController(text: '123456');
   String countryCode = '+86';
   String? error;
+  bool isLoggingIn = false;
 
   @override
   void dispose() {
@@ -1929,13 +2075,15 @@ class _AuthPageState extends State<AuthPage> {
           ),
         ),
         child: SafeArea(
-          child: ListView(
-            padding: const EdgeInsets.fromLTRB(20, 28, 20, 24),
+          child: Stack(
             children: [
-              Center(child: AppBrandLogo(size: 84)),
+              ListView(
+                padding: const EdgeInsets.fromLTRB(20, 28, 20, 24),
+                children: [
+                  const Center(child: AppBrandLogo(size: 84)),
               const SizedBox(height: 16),
               Text(
-                '清洗到家',
+                context.s.appTitle,
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.headlineMedium?.copyWith(
                       fontWeight: FontWeight.w800,
@@ -1944,10 +2092,10 @@ class _AuthPageState extends State<AuthPage> {
               ),
               const SizedBox(height: 8),
               Text(
-                '智慧洗车 · 一键预约 · 轻松管理',
+                context.s.appTagline,
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: Colors.white.withOpacity(0.92),
+                      color: Colors.white.withValues(alpha: 0.92),
                     ),
               ),
               const SizedBox(height: 24),
@@ -1958,7 +2106,7 @@ class _AuthPageState extends State<AuthPage> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Text(
-                      '欢迎登录',
+                      context.s.welcomeLogin,
                       style: Theme.of(context).textTheme.titleLarge?.copyWith(
                             fontWeight: FontWeight.w800,
                             color: AppColors.textPrimary,
@@ -1966,7 +2114,7 @@ class _AuthPageState extends State<AuthPage> {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      '登录后根据账号角色进入用户 / 商家 / 管理端',
+                      context.s.loginRoleHint,
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
                     const SizedBox(height: 18),
@@ -1985,8 +2133,7 @@ class _AuthPageState extends State<AuthPage> {
                         Expanded(
                           child: TextField(
                             controller: usernameController,
-                            decoration: const InputDecoration(
-                              labelText: '手机号或测试账号',
+                            decoration: InputDecoration(labelText: context.s.phoneOrTestAccount,
                             ),
                           ),
                         ),
@@ -1994,14 +2141,14 @@ class _AuthPageState extends State<AuthPage> {
                     ),
                     const SizedBox(height: 6),
                     Text(
-                      '手机号登录只输入号码；测试账号 user / shop / admin 不受区号影响。',
+                      context.s.phoneLoginHint,
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
                     const SizedBox(height: 12),
                     TextField(
                       controller: passwordController,
                       obscureText: true,
-                      decoration: const InputDecoration(labelText: '密码'),
+                      decoration: InputDecoration(labelText: context.s.password),
                     ),
                     if (error != null) ...[
                       const SizedBox(height: 10),
@@ -2015,17 +2162,38 @@ class _AuthPageState extends State<AuthPage> {
                     ],
                     const SizedBox(height: 18),
                     FilledButton(
-                      onPressed: () async {
-                        final ok = await store.login(
-                          _loginUsername(),
-                          passwordController.text,
-                        );
-                        if (!ok && mounted) {
-                          setState(() => error =
-                              store.lastAuthMessage ?? '账号或密码不匹配');
-                        }
-                      },
-                      child: const Text('登录'),
+                      onPressed: isLoggingIn
+                          ? null
+                          : () async {
+                              setState(() {
+                                isLoggingIn = true;
+                                error = null;
+                              });
+                              try {
+                                final ok = await store.login(
+                                  _loginUsername(),
+                                  passwordController.text,
+                                );
+                                if (!ok && mounted) {
+                                  setState(() => error =
+                                      store.lastAuthMessage ?? context.s.accountMismatch);
+                                }
+                              } finally {
+                                if (mounted) {
+                                  setState(() => isLoggingIn = false);
+                                }
+                              }
+                            },
+                      child: isLoggingIn
+                          ? const SizedBox(
+                              height: 22,
+                              width: 22,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2.5,
+                                color: Colors.white,
+                              ),
+                            )
+                          : Text(context.s.login),
                     ),
                     const SizedBox(height: 12),
                     Row(
@@ -2037,7 +2205,7 @@ class _AuthPageState extends State<AuthPage> {
                                 builder: (_) => const RegisterUserPage(),
                               ),
                             ),
-                            child: const Text('用户注册'),
+                            child: Text(context.s.userRegister),
                           ),
                         ),
                         const SizedBox(width: 12),
@@ -2048,7 +2216,7 @@ class _AuthPageState extends State<AuthPage> {
                                 builder: (_) => const RegisterShopPage(),
                               ),
                             ),
-                            child: const Text('商家注册'),
+                            child: Text(context.s.shopRegister),
                           ),
                         ),
                       ],
@@ -2058,6 +2226,13 @@ class _AuthPageState extends State<AuthPage> {
               ),
               const SizedBox(height: 16),
               const DemoCredentialCard(),
+                ],
+              ),
+              const Positioned(
+                top: 8,
+                right: 8,
+                child: LanguageSwitcher(),
+              ),
             ],
           ),
         ),
@@ -2082,6 +2257,7 @@ class DemoCredentialCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final s = context.s;
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -2097,7 +2273,7 @@ class DemoCredentialCard extends StatelessWidget {
               const AppIconBadge(icon: Icons.key_rounded, size: 36),
               const SizedBox(width: 10),
               Text(
-                '演示账号',
+                s.demoAccounts,
                 style: Theme.of(context).textTheme.titleSmall?.copyWith(
                       fontWeight: FontWeight.w800,
                       color: AppColors.primaryDark,
@@ -2138,18 +2314,18 @@ class CountryCodeDropdown extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final locale = LocaleScope.of(context).appLocale;
     final selected = countryCallingCodeForDialCode(value);
     return InkWell(
       onTap: () => _openPicker(context),
       borderRadius: BorderRadius.circular(4),
       child: InputDecorator(
-        decoration: const InputDecoration(
-          labelText: '区号',
-          border: OutlineInputBorder(),
-          suffixIcon: Icon(Icons.arrow_drop_down),
+        decoration: InputDecoration(labelText: context.s.countryCodeLabel,
+          border: const OutlineInputBorder(),
+          suffixIcon: const Icon(Icons.arrow_drop_down),
         ),
         child: Text(
-          selected.displayLabel,
+          selected.displayLabelFor(locale),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
         ),
@@ -2211,7 +2387,7 @@ class _CountryCodePickerSheetState extends State<_CountryCodePickerSheet> {
                   textInputAction: TextInputAction.search,
                   enableIMEPersonalizedLearning: true,
                   decoration: InputDecoration(
-                    hintText: '搜索国家/地区或区号',
+                    hintText: context.s.searchCountryHint,
                     prefixIcon: const Icon(Icons.search),
                     suffixIcon: ValueListenableBuilder<int>(
                       valueListenable: filterTick,
@@ -2243,7 +2419,7 @@ class _CountryCodePickerSheetState extends State<_CountryCodePickerSheet> {
                     child: Align(
                       alignment: Alignment.centerLeft,
                       child: Text(
-                        '共 ${filteredCodes.length} 个国家/地区',
+                        context.s.countryRegionCount(filteredCodes.length),
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
                     ),
@@ -2258,15 +2434,19 @@ class _CountryCodePickerSheetState extends State<_CountryCodePickerSheet> {
                     final filteredCodes =
                         filterCountryCallingCodes(searchController.text);
                     if (filteredCodes.isEmpty) {
-                      return const Center(child: Text('未找到匹配的区号'));
+                      return Center(child: Text(context.s.noDialCodeMatch));
                     }
+                    final locale = LocaleScope.of(context).appLocale;
                     return ListView.builder(
                       itemCount: filteredCodes.length,
                       itemBuilder: (context, index) {
                         final country = filteredCodes[index];
+                        final secondaryName = locale == AppLocale.en
+                            ? country.nameZh
+                            : country.nameEn;
                         return ListTile(
-                          title: Text(country.nameZh),
-                          subtitle: Text(country.nameEn),
+                          title: Text(country.localizedName(locale)),
+                          subtitle: Text(secondaryName),
                           trailing: Text(
                             country.dialCode,
                             style: const TextStyle(
@@ -2376,8 +2556,8 @@ class _ShopReviewPageState extends State<ShopReviewPage> {
         latController.text = result.position.latitude.toStringAsFixed(6);
         lngController.text = result.position.longitude.toStringAsFixed(6);
         geocodingMessage = result.formattedAddress == null
-            ? '已根据地址更新坐标'
-            : '已定位：${result.formattedAddress}';
+            ? context.s.geocodeCoordsUpdated
+            : context.s.geocodeLocated(result.formattedAddress!);
       });
     } on GeocodingException catch (exception) {
       if (!mounted) {
@@ -2388,7 +2568,7 @@ class _ShopReviewPageState extends State<ShopReviewPage> {
       if (!mounted) {
         return;
       }
-      setState(() => geocodingMessage = '定位失败：$error');
+      setState(() => geocodingMessage = context.s.geocodeFailedMsg(error));
     } finally {
       if (mounted) {
         setState(() => geocoding = false);
@@ -2402,7 +2582,7 @@ class _ShopReviewPageState extends State<ShopReviewPage> {
     final account = appStore.currentAccount!;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('商家注册审核'),
+        title: Text(context.s.shopRegReviewTitle),
         actions: [
           IconButton(
               onPressed: appStore.logout, icon: const Icon(Icons.logout)),
@@ -2416,20 +2596,20 @@ class _ShopReviewPageState extends State<ShopReviewPage> {
             color: account.approvalStatus.color,
           ),
           const SizedBox(height: 12),
-          Text('登录账号：${account.username}'),
+          Text(context.s.loginAccountLine(account.username)),
           if (account.adminReply.isNotEmpty) ...[
             const SizedBox(height: 8),
             Card(
               color: Theme.of(context).colorScheme.secondaryContainer,
               child: Padding(
                 padding: const EdgeInsets.all(12),
-                child: Text('Admin 回复：${account.adminReply}'),
+                child: Text(context.s.adminReplyLine(account.adminReply)),
               ),
             ),
           ],
           const SizedBox(height: 16),
-          AppTextField(controller: storeNameController, label: '商户名称'),
-          AppTextField(controller: addressController, label: '商户地址'),
+          AppTextField(controller: storeNameController, label: context.s.merchantName),
+          AppTextField(controller: addressController, label: context.s.merchantAddress),
           if (geocoding) ...[
             const SizedBox(height: 8),
             const LinearProgressIndicator(),
@@ -2444,13 +2624,13 @@ class _ShopReviewPageState extends State<ShopReviewPage> {
           Row(
             children: [
               Expanded(
-                  child: AppTextField(controller: latController, label: '纬度')),
+                  child: AppTextField(controller: latController, label: context.s.latitude)),
               const SizedBox(width: 12),
               Expanded(
-                  child: AppTextField(controller: lngController, label: '经度')),
+                  child: AppTextField(controller: lngController, label: context.s.longitude)),
             ],
           ),
-          const Text('商户经营许可证', style: TextStyle(fontWeight: FontWeight.w700)),
+          Text(context.s.merchantLicensePermit, style: const TextStyle(fontWeight: FontWeight.w700)),
           const SizedBox(height: 8),
           LicenseUploadSection(
             files: licenseFiles,
@@ -2462,7 +2642,7 @@ class _ShopReviewPageState extends State<ShopReviewPage> {
             }),
           ),
           const SizedBox(height: 8),
-          const Text('服务类型', style: TextStyle(fontWeight: FontWeight.w700)),
+          Text(context.s.serviceTypes, style: const TextStyle(fontWeight: FontWeight.w700)),
           for (final type in sortedWashServiceTypes(serviceTypes))
             CheckboxListTile(
               value: serviceTypes.contains(type),
@@ -2480,7 +2660,7 @@ class _ShopReviewPageState extends State<ShopReviewPage> {
           FilledButton.icon(
             onPressed: _resubmit,
             icon: const Icon(Icons.upload_file),
-            label: const Text('修改材料并重新提交审核'),
+            label: Text(context.s.resubmitForReview),
           ),
         ],
       ),
@@ -2504,15 +2684,15 @@ class _ShopReviewPageState extends State<ShopReviewPage> {
         lngController.text,
       ]);
       if (licenseFiles.isEmpty) {
-        throw StateError('请上传至少一个经营许可证文件');
+        throw StateError(context.s.errUploadLicense);
       }
       if (serviceTypes.isEmpty) {
-        throw StateError('至少选择一种服务类型');
+        throw StateError(context.s.errSelectOneService);
       }
       final latitude = double.tryParse(latController.text.trim());
       final longitude = double.tryParse(lngController.text.trim());
       if (latitude == null || longitude == null) {
-        throw StateError('经纬度格式不正确');
+        throw StateError(context.s.errInvalidLatLng);
       }
       final appStore = AppScope.of(context);
       appStore.resubmitShopApplication(
@@ -2525,7 +2705,7 @@ class _ShopReviewPageState extends State<ShopReviewPage> {
         serviceTypes: serviceTypes,
       );
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('材料已重新提交，请等待 Admin 审核')),
+        SnackBar(content: Text(context.s.materialsResubmittedWait)),
       );
     } on Object catch (exception) {
       setState(
@@ -2543,19 +2723,21 @@ class RegisterUserPage extends StatefulWidget {
 
 class _RegisterUserPageState extends State<RegisterUserPage> {
   final nameController = TextEditingController();
+  final emailController = TextEditingController();
   final phoneController = TextEditingController();
   final verificationController = TextEditingController();
   final passwordController = TextEditingController();
   final referralController = TextEditingController();
   String countryCode = '+86';
   String? error;
-  int _smsCooldown = 0;
-  Timer? _smsTimer;
+  int _codeCooldown = 0;
+  Timer? _codeTimer;
 
   @override
   void dispose() {
-    _smsTimer?.cancel();
+    _codeTimer?.cancel();
     nameController.dispose();
+    emailController.dispose();
     phoneController.dispose();
     verificationController.dispose();
     passwordController.dispose();
@@ -2567,11 +2749,15 @@ class _RegisterUserPageState extends State<RegisterUserPage> {
   Widget build(BuildContext context) {
     final store = AppScope.of(context);
     return Scaffold(
-      appBar: AppBar(title: const Text('用户注册')),
+      appBar: AppBar(title: Text(context.s.userRegister)),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          AppTextField(controller: nameController, label: '姓名'),
+          AppTextField(controller: nameController, label: context.s.fullNameLabel),
+          AppTextField(
+            controller: emailController,
+            label: context.s.emailLabel,
+          ),
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -2585,26 +2771,29 @@ class _RegisterUserPageState extends State<RegisterUserPage> {
               const SizedBox(width: 12),
               Expanded(
                   child:
-                      AppTextField(controller: phoneController, label: '手机号')),
+                      AppTextField(controller: phoneController, label: context.s.phone)),
             ],
           ),
           AppTextField(
-              controller: verificationController, label: '短信验证码'),
+              controller: verificationController,
+              label: context.s.emailVerificationCode),
           Align(
             alignment: Alignment.centerRight,
             child: TextButton(
-              onPressed: _smsCooldown > 0 ? null : _sendSms,
-              child: Text(_smsCooldown > 0 ? '${_smsCooldown}s 后重发' : '获取验证码'),
+              onPressed: _codeCooldown > 0 ? null : _sendEmailCode,
+              child: Text(_codeCooldown > 0
+                  ? context.s.smsResendIn(_codeCooldown)
+                  : context.s.getVerificationCode),
             ),
           ),
           AppTextField(
             controller: passwordController,
-            label: '密码',
+            label: context.s.password,
             obscureText: true,
           ),
           AppTextField(
             controller: referralController,
-            label: '好友分享码（选填）',
+            label: context.s.referralCodeOptional,
           ),
           if (error != null)
             Text(error!, style: const TextStyle(color: Colors.red)),
@@ -2613,6 +2802,7 @@ class _RegisterUserPageState extends State<RegisterUserPage> {
               try {
                 _validateRequired([
                   nameController.text,
+                  emailController.text,
                   phoneController.text,
                   verificationController.text,
                   passwordController.text,
@@ -2620,6 +2810,7 @@ class _RegisterUserPageState extends State<RegisterUserPage> {
                 await store.registerUser(
                   countryCode: countryCode,
                   phone: phoneController.text,
+                  email: emailController.text,
                   verificationCode: verificationController.text,
                   password: passwordController.text,
                   displayName: nameController.text,
@@ -2630,7 +2821,7 @@ class _RegisterUserPageState extends State<RegisterUserPage> {
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
                     content: Text(
-                        '用户注册成功，请使用账号 $countryCode${phoneController.text.trim()} 登录'),
+                        context.s.userRegisterSuccess('$countryCode${phoneController.text.trim()}')),
                   ),
                 );
               } on Object catch (exception) {
@@ -2638,43 +2829,44 @@ class _RegisterUserPageState extends State<RegisterUserPage> {
                     exception.toString().replaceFirst('Bad state: ', ''));
               }
             },
-            child: const Text('注册并登录'),
+            child: Text(context.s.registerLogin),
           ),
         ],
       ),
     );
   }
 
-  Future<void> _sendSms() async {
-    if (phoneController.text.trim().isEmpty) {
-      setState(() => error = '请先填写手机号');
+  Future<void> _sendEmailCode() async {
+    final email = emailController.text.trim();
+    if (email.isEmpty) {
+      setState(() => error = context.s.fillEmailFirst);
+      return;
+    }
+    if (!email.contains('@') || !email.contains('.')) {
+      setState(() => error = context.s.invalidEmailFormat);
       return;
     }
     try {
-      final res = await ApiClient.sendSmsCode(
-        countryCode: countryCode,
-        phone: phoneController.text,
+      await ApiClient.sendEmailCode(
+        email: email,
+        purpose: 'register_user',
       );
-      final devCode = res['dev_code'] as String?;
-      if (devCode != null) {
-        verificationController.text = devCode;
-      }
       setState(() {
         error = null;
-        _smsCooldown = 60;
+        _codeCooldown = 60;
       });
-      _smsTimer?.cancel();
-      _smsTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-        if (_smsCooldown <= 1) {
+      _codeTimer?.cancel();
+      _codeTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+        if (_codeCooldown <= 1) {
           timer.cancel();
-          if (mounted) setState(() => _smsCooldown = 0);
+          if (mounted) setState(() => _codeCooldown = 0);
         } else if (mounted) {
-          setState(() => _smsCooldown -= 1);
+          setState(() => _codeCooldown -= 1);
         }
       });
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(res['message'] as String? ?? '验证码已发送')),
+          SnackBar(content: Text(context.s.emailCodeSent)),
         );
       }
     } on Object catch (e) {
@@ -2691,6 +2883,7 @@ class RegisterShopPage extends StatefulWidget {
 }
 
 class _RegisterShopPageState extends State<RegisterShopPage> {
+  final emailController = TextEditingController();
   final phoneController = TextEditingController();
   final verificationController = TextEditingController();
   final passwordController = TextEditingController();
@@ -2713,8 +2906,8 @@ class _RegisterShopPageState extends State<RegisterShopPage> {
   bool geocoding = false;
   String? geocodingMessage;
   Timer? _geocodeDebounce;
-  int _smsCooldown = 0;
-  Timer? _smsTimer;
+  int _codeCooldown = 0;
+  Timer? _codeTimer;
 
   @override
   void initState() {
@@ -2726,8 +2919,9 @@ class _RegisterShopPageState extends State<RegisterShopPage> {
   @override
   void dispose() {
     _geocodeDebounce?.cancel();
-    _smsTimer?.cancel();
+    _codeTimer?.cancel();
     addressDetailController.removeListener(_scheduleGeocode);
+    emailController.dispose();
     phoneController.dispose();
     verificationController.dispose();
     passwordController.dispose();
@@ -2784,8 +2978,8 @@ class _RegisterShopPageState extends State<RegisterShopPage> {
         geocodedLocation = result.position;
         geocodedAddress = result.formattedAddress;
         geocodingMessage = result.formattedAddress == null
-            ? '已根据地址定位'
-            : '已定位：${result.formattedAddress}';
+            ? context.s.addressGeocodedOk
+            : context.s.geocodeLocated(result.formattedAddress!);
       });
       await shopMapKey.currentState?.moveCamera(result.position, zoom: 16);
     } on GeocodingException catch (exception) {
@@ -2795,8 +2989,8 @@ class _RegisterShopPageState extends State<RegisterShopPage> {
       setState(() {
         geocodedLocation = null;
         geocodedAddress = null;
-        geocodingMessage =
-            '${exception.message}（已使用「${selectedSubArea.nameZh}」默认位置）';
+        geocodingMessage = context.s.geocodeSubAreaFallback(
+            exception.message, selectedSubArea.nameZh);
       });
       _syncMapCamera();
     } on Object catch (error) {
@@ -2806,7 +3000,7 @@ class _RegisterShopPageState extends State<RegisterShopPage> {
       setState(() {
         geocodedLocation = null;
         geocodedAddress = null;
-        geocodingMessage = '定位失败，已使用区域默认位置（$error）';
+        geocodingMessage = context.s.geocodeAreaFallback(error);
       });
       _syncMapCamera();
     } finally {
@@ -2846,11 +3040,15 @@ class _RegisterShopPageState extends State<RegisterShopPage> {
   Widget build(BuildContext context) {
     final store = AppScope.of(context);
     return Scaffold(
-      appBar: AppBar(title: const Text('商家注册')),
+      appBar: AppBar(title: Text(context.s.shopRegister)),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          AppTextField(controller: storeNameController, label: '商户名称'),
+          AppTextField(controller: storeNameController, label: context.s.merchantName),
+          AppTextField(
+            controller: emailController,
+            label: context.s.emailLabel,
+          ),
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -2864,22 +3062,23 @@ class _RegisterShopPageState extends State<RegisterShopPage> {
               const SizedBox(width: 12),
               Expanded(
                   child: AppTextField(
-                      controller: phoneController, label: '商户电话号码')),
+                      controller: phoneController, label: context.s.merchantPhoneNumber)),
             ],
           ),
           AppTextField(
-              controller: verificationController, label: '短信验证码'),
+              controller: verificationController,
+              label: context.s.emailVerificationCode),
           Align(
             alignment: Alignment.centerRight,
             child: TextButton(
-              onPressed: _smsCooldown > 0 ? null : _sendSms,
+              onPressed: _codeCooldown > 0 ? null : _sendEmailCode,
               child: Text(
-                  _smsCooldown > 0 ? '${_smsCooldown}s 后重发' : '获取验证码'),
+                  _codeCooldown > 0 ? context.s.smsResendIn(_codeCooldown) : context.s.getVerificationCode),
             ),
           ),
           AppTextField(
             controller: passwordController,
-            label: '密码',
+            label: context.s.password,
             obscureText: true,
           ),
           const Divider(height: 28),
@@ -2920,7 +3119,10 @@ class _RegisterShopPageState extends State<RegisterShopPage> {
           ],
           const SizedBox(height: 8),
           Text(
-            '地址预览：$locationLabel${addressDetailController.text.trim().isEmpty ? '' : ' · ${addressDetailController.text.trim()}'}',
+            context.s.addressPreviewLine(
+              locationLabel,
+              addressDetailController.text.trim(),
+            ),
             style: Theme.of(context).textTheme.bodySmall,
           ),
           if (geocodingMessage != null) ...[
@@ -2935,11 +3137,14 @@ class _RegisterShopPageState extends State<RegisterShopPage> {
             ),
           ],
           Text(
-            '坐标：${mapLocation.latitude.toStringAsFixed(6)}, ${mapLocation.longitude.toStringAsFixed(6)}',
+            context.s.coordinatesLine(
+              mapLocation.latitude,
+              mapLocation.longitude,
+            ),
             style: Theme.of(context).textTheme.bodySmall,
           ),
           const SizedBox(height: 12),
-          const Text('商户经营许可证', style: TextStyle(fontWeight: FontWeight.w700)),
+          Text(context.s.merchantLicensePermit, style: const TextStyle(fontWeight: FontWeight.w700)),
           const SizedBox(height: 8),
           LicenseUploadSection(
             files: licenseFiles,
@@ -2951,7 +3156,7 @@ class _RegisterShopPageState extends State<RegisterShopPage> {
             }),
           ),
           const SizedBox(height: 8),
-          const Text('服务类型', style: TextStyle(fontWeight: FontWeight.w700)),
+          Text(context.s.serviceTypes, style: const TextStyle(fontWeight: FontWeight.w700)),
           for (final type in sortedWashServiceTypes(serviceTypes))
             CheckboxListTile(
               value: serviceTypes.contains(type),
@@ -2978,15 +3183,16 @@ class _RegisterShopPageState extends State<RegisterShopPage> {
                     try {
                       _validateRequired([
                         storeNameController.text,
+                        emailController.text,
                         phoneController.text,
                         verificationController.text,
                         passwordController.text,
                       ]);
                       if (licenseFiles.isEmpty) {
-                        throw StateError('请上传至少一个经营许可证文件');
+                        throw StateError(context.s.errUploadLicense);
                       }
                       if (serviceTypes.isEmpty) {
-                        throw StateError('至少选择一种服务类型');
+                        throw StateError(context.s.errSelectOneService);
                       }
                       setState(() {
                         submitting = true;
@@ -2995,6 +3201,7 @@ class _RegisterShopPageState extends State<RegisterShopPage> {
                       await store.registerShop(
                         countryCode: countryCode,
                         phone: phoneController.text,
+                        email: emailController.text,
                         verificationCode: verificationController.text,
                         password: passwordController.text,
                         storeName: storeNameController.text,
@@ -3009,7 +3216,7 @@ class _RegisterShopPageState extends State<RegisterShopPage> {
                       }
                       Navigator.of(context).pop();
                       ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('商家注册已提交，请等待 Admin 审核')),
+                        SnackBar(content: Text(context.s.shopRegSubmittedAdmin)),
                       );
                     } on Object catch (exception) {
                       if (!mounted) {
@@ -3025,7 +3232,7 @@ class _RegisterShopPageState extends State<RegisterShopPage> {
                       }
                     }
                   },
-            child: Text(submitting ? '提交中…' : '注册商家并加入地图'),
+            child: Text(submitting ? context.s.submittingLabel : context.s.registerShopOnMap),
           ),
         ],
       ),
@@ -3040,36 +3247,37 @@ class _RegisterShopPageState extends State<RegisterShopPage> {
     }
   }
 
-  Future<void> _sendSms() async {
-    if (phoneController.text.trim().isEmpty) {
-      setState(() => error = '请先填写手机号');
+  Future<void> _sendEmailCode() async {
+    final email = emailController.text.trim();
+    if (email.isEmpty) {
+      setState(() => error = context.s.fillEmailFirst);
+      return;
+    }
+    if (!email.contains('@') || !email.contains('.')) {
+      setState(() => error = context.s.invalidEmailFormat);
       return;
     }
     try {
-      final res = await ApiClient.sendSmsCode(
-        countryCode: countryCode,
-        phone: phoneController.text,
+      await ApiClient.sendEmailCode(
+        email: email,
+        purpose: 'register_shop',
       );
-      final devCode = res['dev_code'] as String?;
-      if (devCode != null) {
-        verificationController.text = devCode;
-      }
       setState(() {
         error = null;
-        _smsCooldown = 60;
+        _codeCooldown = 60;
       });
-      _smsTimer?.cancel();
-      _smsTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-        if (_smsCooldown <= 1) {
+      _codeTimer?.cancel();
+      _codeTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+        if (_codeCooldown <= 1) {
           timer.cancel();
-          if (mounted) setState(() => _smsCooldown = 0);
+          if (mounted) setState(() => _codeCooldown = 0);
         } else if (mounted) {
-          setState(() => _smsCooldown -= 1);
+          setState(() => _codeCooldown -= 1);
         }
       });
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(res['message'] as String? ?? '验证码已发送')),
+          SnackBar(content: Text(context.s.emailCodeSent)),
         );
       }
     } on Object catch (e) {
@@ -3078,7 +3286,7 @@ class _RegisterShopPageState extends State<RegisterShopPage> {
   }
 }
 
-/// 切换用户端底部导航 Tab（0 洗车 / 1 预约 / 2 订单 / 3 我的）
+/// 切换用户端底部导航 Tab（0 洗车 / 1 套餐 / 2 订单 / 3 我的）
 void switchUserShellTab(BuildContext context, int tabIndex) {
   context.findAncestorStateOfType<_UserShellState>()?.switchToTab(tabIndex);
 }
@@ -3092,6 +3300,12 @@ class UserShell extends StatefulWidget {
 
 class _UserShellState extends State<UserShell> {
   int index = 0;
+  late final List<Widget> pages = [
+    const UserHomePage(key: PageStorageKey('user_home')),
+    const BundlePurchasePage(key: PageStorageKey('user_packages'), embedded: true),
+    const UserOrdersPage(key: PageStorageKey('user_orders')),
+    const UserProfilePage(key: PageStorageKey('user_profile')),
+  ];
 
   void switchToTab(int tabIndex) {
     if (tabIndex < 0 || tabIndex > 3) {
@@ -3102,14 +3316,14 @@ class _UserShellState extends State<UserShell> {
 
   @override
   Widget build(BuildContext context) {
-    const pages = [
-      UserHomePage(),
-      UserReservationsPage(),
-      UserOrdersPage(),
-      UserProfilePage(),
-    ];
     return Scaffold(
-      body: SafeArea(child: pages[index]),
+      body: SafeArea(
+        bottom: false,
+        child: Padding(
+          padding: const EdgeInsets.only(bottom: kUserShellFabClearance),
+          child: pages[index],
+        ),
+      ),
       floatingActionButton: FloatingActionButton.large(
         onPressed: () async {
           final qr = await Navigator.of(context).push<String>(
@@ -3123,7 +3337,7 @@ class _UserShellState extends State<UserShell> {
               : appStore.storeForDevice(device.id);
           if (store == null) {
             ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('未识别的二维码，请扫描洗车设备码')),
+              SnackBar(content: Text(context.s.unknownQr)),
             );
             return;
           }
@@ -3141,29 +3355,29 @@ class _UserShellState extends State<UserShell> {
         child: const Icon(Icons.qr_code_scanner, size: 36, color: Colors.white),
       ),
       floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
-      bottomNavigationBar: AppBottomNav(
+      bottomNavigationBar: UserDockedBottomNav(
         selectedIndex: index,
         onDestinationSelected: (value) => setState(() => index = value),
-        destinations: const [
+        destinations: [
           NavigationDestination(
-            icon: Icon(Icons.local_car_wash_outlined),
-            selectedIcon: Icon(Icons.local_car_wash),
-            label: '洗车',
+            icon: const Icon(Icons.local_car_wash_outlined),
+            selectedIcon: const Icon(Icons.local_car_wash),
+            label: context.s.tabCarWash,
           ),
           NavigationDestination(
-            icon: Icon(Icons.calendar_month_outlined),
-            selectedIcon: Icon(Icons.calendar_month),
-            label: '预约',
+            icon: const Icon(Icons.confirmation_number_outlined),
+            selectedIcon: const Icon(Icons.confirmation_number),
+            label: context.s.tabPackages,
           ),
           NavigationDestination(
-            icon: Icon(Icons.receipt_long_outlined),
-            selectedIcon: Icon(Icons.receipt_long),
-            label: '订单',
+            icon: const Icon(Icons.receipt_long_outlined),
+            selectedIcon: const Icon(Icons.receipt_long),
+            label: context.s.tabOrders,
           ),
           NavigationDestination(
-            icon: Icon(Icons.person_outline),
-            selectedIcon: Icon(Icons.person),
-            label: '个人中心',
+            icon: const Icon(Icons.person_outline),
+            selectedIcon: const Icon(Icons.person),
+            label: context.s.tabProfile,
           ),
         ],
       ),
@@ -3193,16 +3407,16 @@ class _UserReservationsPageState extends State<UserReservationsPage> {
         return ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            const SectionTitle(
-              title: '我的预约',
-              subtitle: '选择门店并填写信息，即可提交到店预约。',
+            SectionTitle(
+              title: context.s.myReservations,
+              subtitle: context.s.myReservationsSubtitle,
             ),
             const SizedBox(height: 12),
             if (stores.isEmpty)
-              const EmptyState(
+              EmptyState(
                 icon: Icons.storefront_outlined,
-                title: '暂无可预约门店',
-                description: '请稍后再试，或先在洗车页查看附近门店。',
+                title: context.s.noStoresToReserve,
+                description: context.s.noStoresToReserveDesc,
               )
             else
               ReservationFormCard(
@@ -3210,13 +3424,13 @@ class _UserReservationsPageState extends State<UserReservationsPage> {
                 userLocation: fallbackUserLocation,
               ),
             const SizedBox(height: 20),
-            const Text('预约记录', style: TextStyle(fontWeight: FontWeight.w700)),
+            Text(context.s.reservationRecords, style: const TextStyle(fontWeight: FontWeight.w700)),
             const SizedBox(height: 8),
             if (reservations.isEmpty)
-              const EmptyState(
+              EmptyState(
                 icon: Icons.calendar_month_outlined,
-                title: '暂无预约',
-                description: '填写上方表单即可提交第一条预约。',
+                title: context.s.noReservationsYet,
+                description: context.s.noReservationsYetDesc,
               )
             else
               for (final reservation in reservations) ...[
@@ -3287,21 +3501,20 @@ class _ReservationFormCardState extends State<ReservationFormCard> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('新建预约', style: TextStyle(fontWeight: FontWeight.w800)),
+            Text(context.s.newReservation, style: const TextStyle(fontWeight: FontWeight.w800)),
             const SizedBox(height: 12),
             DropdownButtonFormField<String>(
               isExpanded: true,
-              value: selectedStoreId,
-              decoration: const InputDecoration(
-                labelText: '选择门店',
-                border: OutlineInputBorder(),
+              initialValue: selectedStoreId,
+              decoration: InputDecoration(labelText: context.s.selectStore,
+                border: const OutlineInputBorder(),
               ),
               items: [
                 for (final store in widget.stores)
                   DropdownMenuItem(
                     value: store.id,
                     child: Text(
-                      store.name,
+                      store.localizedName(),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -3320,7 +3533,7 @@ class _ReservationFormCardState extends State<ReservationFormCard> {
             ),
             const SizedBox(height: 8),
             Text(
-              '距离约 ${distanceKm.toStringAsFixed(1)} km，预计 ${estimateEtaMinutes(distanceKm)} 分钟到达',
+              context.s.reservationDistanceEta(distanceKm, estimateEtaMinutes(distanceKm)),
               style: TextStyle(
                 fontSize: 13,
                 color: Theme.of(context).colorScheme.onSurfaceVariant,
@@ -3342,10 +3555,9 @@ class _ReservationFormCardState extends State<ReservationFormCard> {
                 final narrow = constraints.maxWidth < 380;
                 final dateField = DropdownButtonFormField<DateTime>(
                   isExpanded: true,
-                  value: selectedDate,
-                  decoration: const InputDecoration(
-                    labelText: '预约日期',
-                    border: OutlineInputBorder(),
+                  initialValue: selectedDate,
+                  decoration: InputDecoration(labelText: context.s.reservationDate,
+                    border: const OutlineInputBorder(),
                   ),
                   items: [
                     for (final date in _dateOptions())
@@ -3366,10 +3578,9 @@ class _ReservationFormCardState extends State<ReservationFormCard> {
                 );
                 final timeField = DropdownButtonFormField<String>(
                   isExpanded: true,
-                  value: selectedTime,
-                  decoration: const InputDecoration(
-                    labelText: '预约时间',
-                    border: OutlineInputBorder(),
+                  initialValue: selectedTime,
+                  decoration: InputDecoration(labelText: context.s.reservationTime,
+                    border: const OutlineInputBorder(),
                   ),
                   items: [
                     for (final time in _timeOptions())
@@ -3401,9 +3612,9 @@ class _ReservationFormCardState extends State<ReservationFormCard> {
               },
             ),
             const SizedBox(height: 12),
-            AppTextField(controller: phoneController, label: '联系电话'),
+            AppTextField(controller: phoneController, label: context.s.contactPhone),
             const SizedBox(height: 8),
-            const Text('预约类型', style: TextStyle(fontWeight: FontWeight.w700)),
+            Text(context.s.reservationType, style: const TextStyle(fontWeight: FontWeight.w700)),
             for (final type in sortedWashServiceTypes(selectedStore.serviceTypes))
               RadioListTile<WashServiceType>(
                 value: type,
@@ -3413,7 +3624,7 @@ class _ReservationFormCardState extends State<ReservationFormCard> {
                 title: Text(type.label),
                 subtitle: washServiceTypeSubtitle(
                   type,
-                  manualHint: '商家人工接待与精洗',
+                  manualHint: context.s.manualServiceDetailHint,
                 ),
                 contentPadding: EdgeInsets.zero,
               ),
@@ -3423,9 +3634,8 @@ class _ReservationFormCardState extends State<ReservationFormCard> {
               controller: noteController,
               minLines: 2,
               maxLines: 3,
-              decoration: const InputDecoration(
-                labelText: '备注，例如车型、洗车需求',
-                border: OutlineInputBorder(),
+              decoration: InputDecoration(labelText: context.s.reservationNotePlaceholder,
+                border: const OutlineInputBorder(),
               ),
             ),
             if (error != null) ...[
@@ -3450,7 +3660,7 @@ class _ReservationFormCardState extends State<ReservationFormCard> {
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(
                       content: Text(
-                        '预约已提交，预计 ${reservation.etaMinutes} 分钟到达',
+                        context.s.reservationSubmittedEta(reservation.etaMinutes),
                       ),
                     ),
                   );
@@ -3461,7 +3671,7 @@ class _ReservationFormCardState extends State<ReservationFormCard> {
                 }
               },
               icon: const Icon(Icons.send),
-              label: const Text('提交预约'),
+              label: Text(context.s.submitReservation),
             ),
           ],
         ),
@@ -3498,7 +3708,7 @@ class _UserHomePageState extends State<UserHomePage> {
   CarWashStore? selectedStore;
   bool locating = true;
   bool mapReady = false;
-  String locationMessage = '正在获取定位...';
+  String locationMessage = AppStrings.current.locationLoadingDots;
 
   @override
   void initState() {
@@ -3529,14 +3739,14 @@ class _UserHomePageState extends State<UserHomePage> {
         icon: BitmapDescriptor.defaultMarkerWithHue(
           BitmapDescriptor.hueAzure,
         ),
-        infoWindow: const InfoWindow(title: '我的位置'),
+        infoWindow: InfoWindow(title: context.s.myLocation),
       ),
       for (final washStore in visibleStores)
         Marker(
           markerId: MarkerId(washStore.id),
           position: washStore.position,
           infoWindow: InfoWindow(
-            title: washStore.name,
+            title: washStore.localizedName(),
             snippet: washStore.serviceSummary,
           ),
           onTap: () => setState(() => selectedStore = washStore),
@@ -3552,13 +3762,50 @@ class _UserHomePageState extends State<UserHomePage> {
         ),
     };
 
-    return ListView(
+    return RefreshIndicator(
+      onRefresh: () => store.syncFromBackend(),
+      child: ListView(
       padding: const EdgeInsets.all(16),
+      physics: const AlwaysScrollableScrollPhysics(),
       children: [
-        const SectionTitle(
-          title: '洗车',
-          subtitle: '地图显示附近洗车店，支持自助扫码洗车与到店预约。',
+        SectionTitle(
+          title: context.s.carWashTitle,
+          subtitle: context.s.carWashSubtitle,
         ),
+        if (store.isSyncing) ...[
+          const SizedBox(height: 8),
+          const LinearProgressIndicator(
+            minHeight: 3,
+            backgroundColor: AppColors.primarySurface,
+          ),
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Text(
+              context.s.syncingData,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ),
+        ],
+        if (store.lastSyncError != null) ...[
+          const SizedBox(height: 8),
+          Material(
+            color: Colors.orange.shade50,
+            borderRadius: BorderRadius.circular(10),
+            child: ListTile(
+              dense: true,
+              leading: Icon(Icons.cloud_off_outlined, color: Colors.orange.shade800),
+              title: Text(
+                store.lastSyncError!,
+                style: TextStyle(color: Colors.orange.shade900, fontSize: 13),
+              ),
+              subtitle: Text(context.s.syncFailedHint),
+              trailing: TextButton(
+                onPressed: store.isSyncing ? null : () => store.syncFromBackend(),
+                child: Text(context.s.retrySync),
+              ),
+            ),
+          ),
+        ],
         if (store.runningOrder != null) ...[
           const SizedBox(height: 12),
           Card(
@@ -3568,11 +3815,11 @@ class _UserHomePageState extends State<UserHomePage> {
                 icon: Icons.local_car_wash,
                 size: 44,
               ),
-              title: const Text(
-                '您有进行中的订单',
-                style: TextStyle(fontWeight: FontWeight.w800),
+              title: Text(
+                context.s.orderInProgress,
+                style: const TextStyle(fontWeight: FontWeight.w800),
               ),
-              subtitle: const Text('点击查看详情'),
+              subtitle: Text(context.s.clickForDetails),
               trailing: const Icon(Icons.chevron_right),
               onTap: () {
                 final parent =
@@ -3638,17 +3885,18 @@ class _UserHomePageState extends State<UserHomePage> {
           ),
         ],
         const SizedBox(height: 16),
-        const Text('附近门店', style: TextStyle(fontWeight: FontWeight.w800)),
+        Text(context.s.nearbyStores, style: const TextStyle(fontWeight: FontWeight.w800)),
         const SizedBox(height: 8),
         if (sortedStores.isEmpty)
-          const EmptyState(
+          EmptyState(
             icon: Icons.store_outlined,
-            title: '暂无门店',
-            description: '当前没有已审核通过的洗车店。',
+            title: context.s.noStores,
+            description: context.s.noStoresDesc,
           )
         else
           for (final washStore in sortedStores) ...[
             StoreCard(
+              key: ValueKey(washStore.id),
               store: washStore,
               distanceKm: distanceBetweenKm(userLocation, washStore.position),
               onFocusMap: () => _focusStore(washStore),
@@ -3670,50 +3918,57 @@ class _UserHomePageState extends State<UserHomePage> {
             const SizedBox(height: 12),
           ],
       ],
+    ),
     );
   }
 
   Future<void> _loadLocation() async {
     try {
       final enabled = await Geolocator.isLocationServiceEnabled();
+      if (!mounted) return;
       if (!enabled) {
         setState(() {
           locating = false;
-          locationMessage = '定位服务未开启，使用香港中西区默认位置。';
+          locationMessage = context.s.locationDisabledHkFallback;
         });
         return;
       }
       var permission = await Geolocator.checkPermission();
+      if (!mounted) return;
       if (permission == LocationPermission.denied) {
         permission = await Geolocator.requestPermission();
       }
+      if (!mounted) return;
       if (permission == LocationPermission.denied ||
           permission == LocationPermission.deniedForever) {
         setState(() {
           locating = false;
-          locationMessage = '未获得定位权限，使用香港中西区默认位置。';
+          locationMessage = context.s.locationDeniedHkFallback;
         });
         return;
       }
       final position = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.medium,
       ).timeout(const Duration(seconds: 8));
+      if (!mounted) return;
       final location = LatLng(position.latitude, position.longitude);
       setState(() {
         userLocation = location;
         locating = false;
-        locationMessage = '已获取当前位置，列表按距离由近到远排序。';
+        locationMessage = context.s.locationSuccessSorted;
       });
       await mapKey.currentState?.moveCamera(location);
     } on Object {
+      if (!mounted) return;
       setState(() {
         locating = false;
-        locationMessage = '定位失败，使用香港中西区默认位置。';
+        locationMessage = context.s.locationFailedHkFallback;
       });
     }
   }
 
   Future<void> _focusStore(CarWashStore store) async {
+    if (!mounted) return;
     setState(() => selectedStore = store);
     await mapKey.currentState?.moveCamera(store.position, zoom: 14);
   }
@@ -3750,7 +4005,11 @@ class NavigationPanel extends StatelessWidget {
             const SizedBox(width: 12),
             Expanded(
               child: Text(
-                '已选择 ${store.name}：约 ${distanceKm.toStringAsFixed(1)} km，预计 ${estimateEtaMinutes(distanceKm)} 分钟到达。点击店铺卡片的“Google导航”可跳转导航。',
+                context.s.navigationPanelText(
+                  store.localizedName(),
+                  distanceKm,
+                  estimateEtaMinutes(distanceKm),
+                ),
               ),
             ),
           ],
@@ -3794,7 +4053,7 @@ class StoreCard extends StatelessWidget {
               children: [
                 Expanded(
                   child: Text(
-                    store.name,
+                    store.localizedName(),
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
                           fontWeight: FontWeight.w800,
                         ),
@@ -3804,17 +4063,17 @@ class StoreCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 6),
-            Text(store.address),
+            Text(store.localizedAddress()),
             const SizedBox(height: 10),
             Wrap(
               spacing: 8,
               runSpacing: 8,
               children: [
                 InfoChip(icon: Icons.star, label: store.rating.toString()),
-                InfoChip(icon: Icons.event_available, label: '$idleCount 空闲'),
+                InfoChip(icon: Icons.event_available, label: context.s.idleBaysCount(idleCount)),
                 for (final type in store.serviceTypes)
                   InfoChip(label: type.label, icon: type.icon),
-                for (final tag in store.tags) InfoChip(label: tag),
+                for (final tag in store.localizedTags()) InfoChip(label: tag),
               ],
             ),
             if (store.serviceTypes.contains(WashServiceType.selfService)) ...[
@@ -3831,22 +4090,22 @@ class StoreCard extends StatelessWidget {
                 OutlinedButton.icon(
                   onPressed: onFocusMap,
                   icon: const Icon(Icons.map_outlined),
-                  label: const Text('查看地图'),
+                  label: Text(context.s.viewMap),
                 ),
                 OutlinedButton.icon(
                   onPressed: onNavigate,
                   icon: const Icon(Icons.navigation_outlined),
-                  label: const Text('Google导航'),
+                  label: Text(context.s.googleNav),
                 ),
                 FilledButton.tonalIcon(
                   onPressed: onReserve,
                   icon: const Icon(Icons.calendar_month),
-                  label: const Text('预约到店'),
+                  label: Text(context.s.reserveStore),
                 ),
                 FilledButton.icon(
                   onPressed: onScan,
                   icon: const Icon(Icons.qr_code_scanner),
-                  label: const Text('扫码洗车'),
+                  label: Text(context.s.scanCarWashTitle),
                 ),
               ],
             ),
@@ -3910,14 +4169,14 @@ class _CreateReservationPageState extends State<CreateReservationPage> {
     final distanceKm =
         distanceBetweenKm(widget.userLocation, widget.store.position);
     return Scaffold(
-      appBar: AppBar(title: const Text('预约到店')),
+      appBar: AppBar(title: Text(context.s.reserveStore)),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
           SectionTitle(
-            title: widget.store.name,
+            title: widget.store.localizedName(),
             subtitle:
-                '距离 ${distanceKm.toStringAsFixed(1)} km，预计 ${estimateEtaMinutes(distanceKm)} 分钟到达。',
+                context.s.reservationDistanceEtaPeriod(distanceKm, estimateEtaMinutes(distanceKm)),
           ),
           const SizedBox(height: 16),
           LayoutBuilder(
@@ -3925,10 +4184,9 @@ class _CreateReservationPageState extends State<CreateReservationPage> {
               final narrow = constraints.maxWidth < 380;
               final dateField = DropdownButtonFormField<DateTime>(
                 isExpanded: true,
-                value: selectedDate,
-                decoration: const InputDecoration(
-                  labelText: '预约日期',
-                  border: OutlineInputBorder(),
+                initialValue: selectedDate,
+                decoration: InputDecoration(labelText: context.s.reservationDate,
+                  border: const OutlineInputBorder(),
                 ),
                 items: [
                   for (final date in _dateOptions())
@@ -3949,10 +4207,9 @@ class _CreateReservationPageState extends State<CreateReservationPage> {
               );
               final timeField = DropdownButtonFormField<String>(
                 isExpanded: true,
-                value: selectedTime,
-                decoration: const InputDecoration(
-                  labelText: '预约时间',
-                  border: OutlineInputBorder(),
+                initialValue: selectedTime,
+                decoration: InputDecoration(labelText: context.s.reservationTime,
+                  border: const OutlineInputBorder(),
                 ),
                 items: [
                   for (final time in _timeOptions())
@@ -3984,9 +4241,9 @@ class _CreateReservationPageState extends State<CreateReservationPage> {
             },
           ),
           const SizedBox(height: 12),
-          AppTextField(controller: phoneController, label: '联系电话'),
+          AppTextField(controller: phoneController, label: context.s.contactPhone),
           const SizedBox(height: 8),
-          const Text('选择预约类型', style: TextStyle(fontWeight: FontWeight.w700)),
+          Text(context.s.selectReservationTypeLabel, style: const TextStyle(fontWeight: FontWeight.w700)),
           const SizedBox(height: 8),
           for (final type in sortedWashServiceTypes(widget.store.serviceTypes))
             RadioListTile<WashServiceType>(
@@ -3997,7 +4254,7 @@ class _CreateReservationPageState extends State<CreateReservationPage> {
               title: Text(type.label),
               subtitle: washServiceTypeSubtitle(
                 type,
-                manualHint: '商家人工接待与精洗',
+                manualHint: context.s.manualServiceDetailHint,
               ),
               contentPadding: EdgeInsets.zero,
             ),
@@ -4008,9 +4265,8 @@ class _CreateReservationPageState extends State<CreateReservationPage> {
             controller: noteController,
             minLines: 3,
             maxLines: 4,
-            decoration: const InputDecoration(
-              labelText: '备注，例如车型、洗车需求',
-              border: OutlineInputBorder(),
+            decoration: InputDecoration(labelText: context.s.reservationNotePlaceholder,
+              border: const OutlineInputBorder(),
             ),
           ),
           if (error != null) ...[
@@ -4033,7 +4289,7 @@ class _CreateReservationPageState extends State<CreateReservationPage> {
                 Navigator.of(context).pop();
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
-                      content: Text('预约已提交，预计 ${reservation.etaMinutes} 分钟到达')),
+                      content: Text(context.s.reservationSubmittedEta(reservation.etaMinutes))),
                 );
               } on StateError catch (exception) {
                 setState(() => error = exception.message);
@@ -4042,7 +4298,7 @@ class _CreateReservationPageState extends State<CreateReservationPage> {
               }
             },
             icon: const Icon(Icons.send),
-            label: const Text('提交预约'),
+            label: Text(context.s.submitReservation),
           ),
         ],
       ),
@@ -4126,16 +4382,16 @@ class _ScanPayPageState extends State<ScanPayPage> {
     final actualAmount = usingCredit ? 0.0 : selectedPackage.price;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('扫码支付')),
+      appBar: AppBar(title: Text(context.s.scanPayTitle)),
       body: AnimatedBuilder(
         animation: appStore,
         builder: (context, _) {
           return ListView(
             padding: const EdgeInsets.all(16),
             children: [
-              const SectionTitle(
-                title: '扫码洗车',
-                subtitle: '扫描设备二维码，选择套餐后进入收银台完成付款。',
+              SectionTitle(
+                title: context.s.scanCarWashTitle,
+                subtitle: context.s.scanCarWashSubtitle,
               ),
               const SizedBox(height: 8),
               const SelfServiceEcoBanner(),
@@ -4154,15 +4410,14 @@ class _ScanPayPageState extends State<ScanPayPage> {
                         });
                       },
                 icon: const Icon(Icons.qr_code_scanner),
-                label: const Text('重新扫码'),
+                label: Text(context.s.rescan),
               ),
               const SizedBox(height: 12),
               DropdownButtonFormField<String>(
                 isExpanded: true,
-                value: qrCode,
-                decoration: const InputDecoration(
-                  labelText: '当前设备',
-                  border: OutlineInputBorder(),
+                initialValue: qrCode,
+                decoration: InputDecoration(labelText: context.s.currentDeviceLabel,
+                  border: const OutlineInputBorder(),
                 ),
                 items: [
                   for (final store in availableStores)
@@ -4170,7 +4425,7 @@ class _ScanPayPageState extends State<ScanPayPage> {
                       DropdownMenuItem(
                         value: device.qrCode,
                         child: Text(
-                          '${device.qrCode} - ${store.name} ${device.bayName}',
+                          '${device.qrCode} - ${store.localizedName()} ${device.localizedBayName()}',
                         ),
                       ),
                 ],
@@ -4203,12 +4458,12 @@ class _ScanPayPageState extends State<ScanPayPage> {
                       : Theme.of(context)
                           .colorScheme
                           .surfaceContainerHighest
-                          .withOpacity(0.5),
+                          .withValues(alpha: 0.5),
                   child: SwitchListTile(
                     title: Text(
                       canUseFreeWash
-                          ? '使用免费洗车（剩余 $freeWashCredits 次）'
-                          : '使用免费洗车（暂无可用次数）',
+                          ? context.s.useFreeWashRemaining(freeWashCredits)
+                          : context.s.useFreeWashOff,
                       style: TextStyle(
                         color: canUseFreeWash
                             ? null
@@ -4217,8 +4472,8 @@ class _ScanPayPageState extends State<ScanPayPage> {
                     ),
                     subtitle: Text(
                       canUseFreeWash
-                          ? '开启后本单实付款 ¥0，关闭则按套餐原价支付'
-                          : '完成分享或兑换后可获得免费洗车次数',
+                          ? context.s.useFreeWashSubtitlePay
+                          : context.s.useFreeWashSubtitleOff,
                       style: TextStyle(
                         color: canUseFreeWash
                             ? null
@@ -4241,17 +4496,17 @@ class _ScanPayPageState extends State<ScanPayPage> {
                       : Theme.of(context)
                           .colorScheme
                           .surfaceContainerHighest
-                          .withOpacity(0.5),
+                          .withValues(alpha: 0.5),
                   child: SwitchListTile(
                     title: Text(
                       canUsePrepaid
-                          ? '使用洗车次卡（剩余 $prepaidCredits 次）'
-                          : '暂无洗车次卡',
+                          ? context.s.usePrepaidRemaining(prepaidCredits)
+                          : context.s.usePrepaidOff,
                     ),
                     subtitle: Text(
                       canUsePrepaid
-                          ? '开启后本单免支付，优先消耗次卡'
-                          : '可在个人中心购买次卡套餐',
+                          ? context.s.usePrepaidSubtitleOn
+                          : context.s.usePrepaidSubtitleOff,
                     ),
                     value: canUsePrepaid && usePrepaidWashThisOrder,
                     onChanged: !isProcessing && canUsePrepaid
@@ -4264,7 +4519,7 @@ class _ScanPayPageState extends State<ScanPayPage> {
                 ),
               ],
               const SizedBox(height: 16),
-              const Text('选择套餐', style: TextStyle(fontWeight: FontWeight.w700)),
+              Text(context.s.selectPackageLabel, style: const TextStyle(fontWeight: FontWeight.w700)),
               const SizedBox(height: 8),
               for (final washPackage in packages)
                 PackageOptionCard(
@@ -4281,7 +4536,7 @@ class _ScanPayPageState extends State<ScanPayPage> {
               Card(
                 child: ListTile(
                   leading: const Icon(Icons.payments_outlined),
-                  title: const Text('实付款'),
+                  title: Text(context.s.actualPaymentLabel),
                   trailing: Text(
                     '¥${actualAmount.toStringAsFixed(0)}',
                     style: const TextStyle(
@@ -4291,11 +4546,11 @@ class _ScanPayPageState extends State<ScanPayPage> {
                   ),
                   subtitle: useFreeWashThisOrder && canUseFreeWash
                       ? Text(
-                          '原价 ¥${selectedPackage.price.toStringAsFixed(0)}，已使用免费洗车',
+                          context.s.originalPriceFreeUsed(selectedPackage.price),
                         )
                       : usePrepaidWashThisOrder && canUsePrepaid
                           ? Text(
-                              '原价 ¥${selectedPackage.price.toStringAsFixed(0)}，已使用洗车次卡',
+                              context.s.originalPricePrepaidUsed(selectedPackage.price),
                             )
                           : null,
                 ),
@@ -4317,10 +4572,10 @@ class _ScanPayPageState extends State<ScanPayPage> {
                     : const Icon(Icons.payments_outlined),
                 label: Text(
                   isProcessing
-                      ? '处理中...'
+                      ? context.s.processingLabel
                       : actualAmount <= 0
-                          ? '确认并启动洗车'
-                          : '前往付款 ¥${actualAmount.toStringAsFixed(0)}',
+                          ? context.s.confirmStartWash
+                          : context.s.goToPayment(actualAmount),
                 ),
               ),
             ],
@@ -4335,11 +4590,11 @@ class _ScanPayPageState extends State<ScanPayPage> {
       return;
     }
     if (qrCode.trim().isEmpty) {
-      setState(() => error = '请选择设备二维码');
+      setState(() => error = context.s.selectDeviceQr);
       return;
     }
     if (selectedPackageId.trim().isEmpty) {
-      setState(() => error = '请选择套餐');
+      setState(() => error = context.s.selectPackageRequired);
       return;
     }
 
@@ -4362,7 +4617,7 @@ class _ScanPayPageState extends State<ScanPayPage> {
         await appStore.markOrderPaid(
           order.id,
           transactionId: 'FREE-${order.id}',
-          paymentMethod: '免费洗车',
+          paymentMethod: context.s.freeWashLabel,
         );
         await appStore.startOrder(order);
         if (!context.mounted) {
@@ -4370,7 +4625,7 @@ class _ScanPayPageState extends State<ScanPayPage> {
         }
         Navigator.of(context).pop();
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('已使用免费洗车 · 订单 ${order.id} 已启动')),
+          SnackBar(content: Text(context.s.orderStartedFree(order.id))),
         );
         return;
       }
@@ -4384,8 +4639,8 @@ class _ScanPayPageState extends State<ScanPayPage> {
       final selectedPackage = packages.firstWhere(
         (washPackage) => washPackage.id == selectedPackageId,
       );
-      final storeName = selectedStore?.name ?? '洗车门店';
-      final packageName = selectedPackage.name;
+      final storeName = selectedStore?.name ?? context.s.defaultCarWashStore;
+      final packageName = selectedPackage.localizedName();
 
       final paid = await Navigator.of(context).push<bool>(
         MaterialPageRoute(
@@ -4396,7 +4651,7 @@ class _ScanPayPageState extends State<ScanPayPage> {
               packageName: packageName,
               amount: order.amount,
               usedFreeWash: order.usedFreeWashCredit,
-              payerDisplayName: appStore.currentAccount?.displayName ?? '用户',
+              payerDisplayName: appStore.currentAccount?.displayName ?? context.s.defaultUserLabel,
               payerPhone: appStore.currentAccount?.phone ?? '',
               onPaymentConfirmed: ({
                 required transactionId,
@@ -4423,6 +4678,10 @@ class _ScanPayPageState extends State<ScanPayPage> {
       }
     } on StateError catch (exception) {
       setState(() => error = exception.message);
+    } on ApiException catch (exception) {
+      setState(() => error = exception.message);
+    } on ApiConnectionException catch (exception) {
+      setState(() => error = exception.message);
     } finally {
       if (mounted) {
         setState(() => isProcessing = false);
@@ -4448,16 +4707,16 @@ class OrdersPage extends StatelessWidget {
         return ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            const SectionTitle(
-              title: '我的订单',
-              subtitle: '跟踪支付、启动、洗车中、完成和异常状态。',
+            SectionTitle(
+              title: context.s.myOrdersTitle,
+              subtitle: context.s.myOrdersSubtitleTrack,
             ),
             const SizedBox(height: 12),
             if (userOrders.isEmpty)
-              const EmptyState(
+              EmptyState(
                 icon: Icons.receipt_long_outlined,
-                title: '还没有订单',
-                description: '在洗车页选择门店并扫码支付。',
+                title: context.s.noOrdersYet,
+                description: context.s.scanOnHomeHint,
               )
             else
               for (final order in userOrders) ...[
@@ -4483,31 +4742,31 @@ class _ShopShellState extends State<ShopShell> {
 
   @override
   Widget build(BuildContext context) {
-    const pages = [
-      ShopStoresPage(),
-      ShopReservationsPage(),
-      ShopProfilePage(),
+    final pages = [
+      const ShopStoresPage(),
+      const ShopReservationsPage(),
+      const ShopProfilePage(),
     ];
     return Scaffold(
       body: SafeArea(child: pages[index]),
       bottomNavigationBar: AppBottomNav(
         selectedIndex: index,
         onDestinationSelected: (value) => setState(() => index = value),
-        destinations: const [
+        destinations: [
           NavigationDestination(
-            icon: Icon(Icons.storefront_outlined),
-            selectedIcon: Icon(Icons.storefront),
-            label: '店铺',
+            icon: const Icon(Icons.storefront_outlined),
+            selectedIcon: const Icon(Icons.storefront),
+            label: context.s.tabStores,
           ),
           NavigationDestination(
-            icon: Icon(Icons.calendar_month_outlined),
-            selectedIcon: Icon(Icons.calendar_month),
-            label: '预约',
+            icon: const Icon(Icons.calendar_month_outlined),
+            selectedIcon: const Icon(Icons.calendar_month),
+            label: context.s.tabReservations,
           ),
           NavigationDestination(
-            icon: Icon(Icons.person_outline),
-            selectedIcon: Icon(Icons.person),
-            label: '我的',
+            icon: const Icon(Icons.person_outline),
+            selectedIcon: const Icon(Icons.person),
+            label: context.s.tabMine,
           ),
         ],
       ),
@@ -4529,16 +4788,17 @@ class ShopStoresPage extends StatelessWidget {
           padding: const EdgeInsets.all(16),
           children: [
             TopBar(
-              title: 'Shop 商家端',
-              subtitle:
-                  '${appStore.currentAccount?.displayName ?? ''}，管理店铺、工位状态和工位统计。',
+              title: context.s.shopMerchantTitle,
+              subtitle: context.s.shopMerchantSubtitleNamed(
+                appStore.currentAccount?.displayName ?? '',
+              ),
             ),
             FilledButton.icon(
               onPressed: () => Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const AddShopStorePage()),
               ),
               icon: const Icon(Icons.add_business),
-              label: const Text('添加新的店铺'),
+              label: Text(context.s.addNewShopBtn),
             ),
             const SizedBox(height: 12),
             for (final store in stores) ...[
@@ -4576,7 +4836,7 @@ class _ShopReservationsPageState extends State<ShopReservationsPage> {
         return ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            const TopBar(title: '预约表单', subtitle: '按店铺筛选用户提交的预约。'),
+            TopBar(title: context.s.reservationFormShopTitle, subtitle: context.s.reservationFormShopSubtitle),
             StoreFilterDropdown(
               stores: stores,
               value: selectedStoreId,
@@ -4584,10 +4844,10 @@ class _ShopReservationsPageState extends State<ShopReservationsPage> {
             ),
             const SizedBox(height: 12),
             if (reservations.isEmpty)
-              const EmptyState(
+              EmptyState(
                 icon: Icons.calendar_month_outlined,
-                title: '暂无预约',
-                description: '用户提交预约到店后会显示在这里。',
+                title: context.s.noReservationsYet,
+                description: context.s.shopReservationsEmptyDesc,
               )
             else
               for (final reservation in reservations) ...[
@@ -4627,9 +4887,9 @@ class _ShopOrdersPageState extends State<ShopOrdersPage> {
         return ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            const TopBar(
-              title: '商家订单',
-              subtitle: '用户付款后实时同步收款，可按店铺筛选查看。',
+            TopBar(
+              title: context.s.shopOrdersTitle,
+              subtitle: context.s.shopOrdersSubtitle,
             ),
             StoreFilterDropdown(
               stores: stores,
@@ -4641,7 +4901,7 @@ class _ShopOrdersPageState extends State<ShopOrdersPage> {
               children: [
                 Expanded(
                   child: MetricCard(
-                    label: '已收款',
+                    label: context.s.collected,
                     value:
                         '¥${appStore.receivedRevenueForCurrentShop(storeId: selectedStoreId == 'all' ? null : selectedStoreId).toStringAsFixed(0)}',
                     icon: Icons.payments,
@@ -4650,9 +4910,9 @@ class _ShopOrdersPageState extends State<ShopOrdersPage> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: MetricCard(
-                    label: '待支付',
+                    label: context.s.pendingPay,
                     value:
-                        '${appStore.pendingPaymentCountForCurrentShop(storeId: selectedStoreId == 'all' ? null : selectedStoreId)} 笔',
+                        context.s.orderCountUnit(appStore.pendingPaymentCountForCurrentShop(storeId: selectedStoreId == 'all' ? null : selectedStoreId)),
                     icon: Icons.hourglass_empty,
                   ),
                 ),
@@ -4660,16 +4920,16 @@ class _ShopOrdersPageState extends State<ShopOrdersPage> {
             ),
             const SizedBox(height: 8),
             MetricCard(
-              label: '已完成订单',
+              label: context.s.completedOrdersLabel,
               value: '$completed / ${orders.length}',
               icon: Icons.done_all,
             ),
             const SizedBox(height: 12),
             if (orders.isEmpty)
-              const EmptyState(
+              EmptyState(
                 icon: Icons.receipt_long_outlined,
-                title: '暂无订单',
-                description: '用户扫码付款后订单会显示在这里。',
+                title: context.s.noOrdersShopTitle,
+                description: context.s.shopOrdersEmptyDesc,
               )
             else
               for (final order in orders) ...[
@@ -4747,32 +5007,32 @@ class _AdminShellState extends State<AdminShell> {
               backgroundColor: Colors.red,
               child: const Icon(Icons.fact_check),
             ),
-            label: '审核',
+            label: context.s.tabApproval,
           ),
           NavigationDestination(
-            icon: Icon(Icons.dashboard_outlined),
-            selectedIcon: Icon(Icons.dashboard),
-            label: '总览',
+            icon: const Icon(Icons.dashboard_outlined),
+            selectedIcon: const Icon(Icons.dashboard),
+            label: context.s.tabOverview,
           ),
           NavigationDestination(
-            icon: Icon(Icons.store_outlined),
-            selectedIcon: Icon(Icons.store),
-            label: '店铺',
+            icon: const Icon(Icons.store_outlined),
+            selectedIcon: const Icon(Icons.store),
+            label: context.s.tabStores,
           ),
           NavigationDestination(
-            icon: Icon(Icons.calendar_month_outlined),
-            selectedIcon: Icon(Icons.calendar_month),
-            label: '预约',
+            icon: const Icon(Icons.calendar_month_outlined),
+            selectedIcon: const Icon(Icons.calendar_month),
+            label: context.s.tabReservations,
           ),
-          const NavigationDestination(
-            icon: Icon(Icons.receipt_long_outlined),
-            selectedIcon: Icon(Icons.receipt_long),
-            label: '订单',
+          NavigationDestination(
+            icon: const Icon(Icons.receipt_long_outlined),
+            selectedIcon: const Icon(Icons.receipt_long),
+            label: context.s.tabOrders,
           ),
-          const NavigationDestination(
-            icon: Icon(Icons.price_change_outlined),
-            selectedIcon: Icon(Icons.price_change),
-            label: '定价',
+          NavigationDestination(
+            icon: const Icon(Icons.price_change_outlined),
+            selectedIcon: const Icon(Icons.price_change),
+            label: context.s.tabPricing,
           ),
         ],
       ),
@@ -4793,25 +5053,23 @@ Future<void> _editStorePackagePrice(
   final saved = await showDialog<bool>(
     context: context,
     builder: (context) => AlertDialog(
-      title: Text('修改「${washPackage.name}」'),
+      title: Text(context.s.modifyPackageName(washPackage.localizedName())),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           TextField(
             controller: priceController,
             keyboardType: TextInputType.number,
-            decoration: const InputDecoration(
-              labelText: '价格（元）',
-              border: OutlineInputBorder(),
+            decoration: InputDecoration(labelText: context.s.priceYuanLabel,
+              border: const OutlineInputBorder(),
             ),
           ),
           const SizedBox(height: 12),
           TextField(
             controller: minutesController,
             keyboardType: TextInputType.number,
-            decoration: const InputDecoration(
-              labelText: '时长（分钟）',
-              border: OutlineInputBorder(),
+            decoration: InputDecoration(labelText: context.s.durationMinLabel,
+              border: const OutlineInputBorder(),
             ),
           ),
         ],
@@ -4819,11 +5077,11 @@ Future<void> _editStorePackagePrice(
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(context, false),
-          child: const Text('取消'),
+          child: Text(context.s.cancelBtn),
         ),
         FilledButton(
           onPressed: () => Navigator.pop(context, true),
-          child: const Text('保存'),
+          child: Text(context.s.saveBtn),
         ),
       ],
     ),
@@ -4837,10 +5095,10 @@ Future<void> _editStorePackagePrice(
     final price = double.tryParse(priceController.text.trim());
     final minutes = int.tryParse(minutesController.text.trim());
     if (price == null || price < 0) {
-      throw StateError('价格格式不正确');
+      throw StateError(context.s.priceFormatInvalid);
     }
     if (minutes == null || minutes <= 0) {
-      throw StateError('时长格式不正确');
+      throw StateError(context.s.durationFormatInvalid);
     }
     await appStore.updateStorePackage(
       storeId: store.id,
@@ -4850,13 +5108,13 @@ Future<void> _editStorePackagePrice(
     );
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('套餐价格已更新')),
+        SnackBar(content: Text(context.s.packagePriceUpdated)),
       );
     }
   } on Object catch (e) {
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('保存失败：$e')),
+        SnackBar(content: Text(context.s.saveFailedDetail(e))),
       );
     }
   } finally {
@@ -4877,7 +5135,7 @@ class AdminOverviewPage extends StatelessWidget {
         return ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            const TopBar(title: 'Admin 平台端', subtitle: '平台总览和关键指标。'),
+            TopBar(title: context.s.adminPlatformTitle, subtitle: context.s.adminOverviewSubtitle),
             const SizedBox(height: 12),
             GridView.count(
               crossAxisCount: 2,
@@ -4888,29 +5146,29 @@ class AdminOverviewPage extends StatelessWidget {
               childAspectRatio: 1.45,
               children: [
                 MetricCard(
-                    label: '用户',
+                    label: context.s.defaultUserLabel,
                     value:
                         '${appStore.accounts.where((a) => a.role == AccountRole.user).length}',
                     icon: Icons.person),
                 MetricCard(
-                    label: '商家',
+                    label: context.s.roleShop,
                     value:
                         '${appStore.accounts.where((a) => a.role == AccountRole.shop).length}',
                     icon: Icons.store),
                 MetricCard(
-                    label: '地图点',
+                    label: context.s.metricMapPoints,
                     value: '${appStore.stores.length}',
                     icon: Icons.location_on),
                 MetricCard(
-                    label: '预约',
+                    label: context.s.tabReservations,
                     value: '${appStore.reservations.length}',
                     icon: Icons.calendar_month),
                 MetricCard(
-                    label: '订单',
+                    label: context.s.tabOrders,
                     value: '${appStore.orders.length}',
                     icon: Icons.receipt_long),
                 MetricCard(
-                    label: '异常设备',
+                    label: context.s.metricFaultDevices,
                     value: '${appStore.alertDeviceCount}',
                     icon: Icons.warning_amber),
               ],
@@ -4966,7 +5224,7 @@ class _AdminAccountsPageState extends State<AdminAccountsPage> {
           child: ListView(
             padding: const EdgeInsets.all(16),
             children: [
-              const TopBar(title: '账号管理', subtitle: '管理用户账号和商家注册信息。'),
+              TopBar(title: context.s.accountManagementTitle, subtitle: context.s.accountManagementSubtitle),
               Row(
                 children: [
                   Expanded(
@@ -4985,7 +5243,7 @@ class _AdminAccountsPageState extends State<AdminAccountsPage> {
                     IconButton(
                       onPressed: _refreshAccounts,
                       icon: const Icon(Icons.refresh),
-                      tooltip: '从后端刷新',
+                      tooltip: context.s.refreshFromBackend,
                     ),
                 ],
               ),
@@ -4997,13 +5255,13 @@ class _AdminAccountsPageState extends State<AdminAccountsPage> {
                     style: const TextStyle(color: Colors.red),
                   ),
                 ),
-              const Text('用户账号管理', style: TextStyle(fontWeight: FontWeight.w800)),
+              Text(context.s.userAccountMgmt, style: const TextStyle(fontWeight: FontWeight.w800)),
               const SizedBox(height: 8),
               for (final account in appStore.accounts
                   .where((item) => item.role == AccountRole.user))
                 AccountApprovalCard(account: account),
               const SizedBox(height: 16),
-              const Text('商家账号管理', style: TextStyle(fontWeight: FontWeight.w800)),
+              Text(context.s.shopAccountMgmt, style: const TextStyle(fontWeight: FontWeight.w800)),
               const SizedBox(height: 8),
               for (final account in appStore.accounts)
                 if (account.role == AccountRole.shop)
@@ -5047,26 +5305,26 @@ class AccountApprovalCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 6),
-            Text('${account.role.label} · 手机/账号：${account.phone}'),
+            Text(context.s.accountRolePhoneLine(account.role.label, account.phone)),
             if (account.role == AccountRole.shop)
               for (final store in appStore.stores.where(
                 (store) => store.ownerAccountId == account.id,
               ))
-                Text('店铺：${store.name} · ${store.address}'),
+                Text(context.s.storeInfoLine(store.localizedName(), store.localizedAddress())),
             if (account.role == AccountRole.shop &&
                 account.licenseFiles.isNotEmpty) ...[
               const SizedBox(height: 8),
               ListTile(
                 contentPadding: EdgeInsets.zero,
                 leading: const Icon(Icons.folder_open),
-                title: Text('查看许可证材料（${account.licenseFiles.length}）'),
+                title: Text(context.s.viewLicenseCount(account.licenseFiles.length)),
                 subtitle: Text(account.licenseFiles.join('，')),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: () {
                   Navigator.of(context).push(
                     MaterialPageRoute(
                       builder: (context) => LicenseMaterialsPage(
-                        title: '${account.displayName} · 许可证材料',
+                        title: context.s.licensePageTitle(account.displayName),
                         files: account.licenseFiles,
                       ),
                     ),
@@ -5075,7 +5333,7 @@ class AccountApprovalCard extends StatelessWidget {
               ),
             ],
             if (account.adminReply.isNotEmpty)
-              Text('Admin 回复：${account.adminReply}'),
+              Text(context.s.adminReplyLine(account.adminReply)),
             if (account.role != AccountRole.admin) ...[
               const SizedBox(height: 8),
               Wrap(
@@ -5085,13 +5343,13 @@ class AccountApprovalCard extends StatelessWidget {
                     onPressed: () => appStore.updateAccountApproval(
                       account,
                       ApprovalStatus.approved,
-                      adminReply: '审核通过',
+                      adminReply: context.s.approvedDefaultReply,
                     ),
-                    child: const Text('批准'),
+                    child: Text(context.s.approve),
                   ),
                   OutlinedButton(
                     onPressed: () => _showRejectDialog(context, appStore),
-                    child: const Text('拒绝并回复'),
+                    child: Text(context.s.rejectAndReply),
                   ),
                 ],
               ),
@@ -5111,24 +5369,23 @@ class AccountApprovalCard extends StatelessWidget {
       context: context,
       builder: (context) {
         return AlertDialog(
-          title: const Text('审核回复'),
+          title: Text(context.s.reviewReply),
           content: TextField(
             controller: replyController,
             minLines: 3,
             maxLines: 5,
-            decoration: const InputDecoration(
-              labelText: '请输入需要商家修改或补充的材料',
-              border: OutlineInputBorder(),
+            decoration: InputDecoration(labelText: context.s.rejectReplyPlaceholder,
+              border: const OutlineInputBorder(),
             ),
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(),
-              child: const Text('取消'),
+              child: Text(context.s.cancelBtn),
             ),
             FilledButton(
               onPressed: () => Navigator.of(context).pop(replyController.text),
-              child: const Text('拒绝并发送'),
+              child: Text(context.s.rejectAndSend),
             ),
           ],
         );
@@ -5141,7 +5398,7 @@ class AccountApprovalCard extends StatelessWidget {
     appStore.updateAccountApproval(
       account,
       ApprovalStatus.rejected,
-      adminReply: reply.trim().isEmpty ? '请修改或补充注册材料' : reply,
+      adminReply: reply.trim().isEmpty ? context.s.defaultRejectMessage : reply,
     );
   }
 }
@@ -5158,7 +5415,7 @@ class AdminStoresPage extends StatelessWidget {
         return ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            const TopBar(title: '店铺和工位', subtitle: '包含商家端全部店铺和工位统计信息。'),
+            TopBar(title: context.s.storesAndBays, subtitle: context.s.storesAndBaysSubtitle),
             for (final store in appStore.stores) ...[
               ShopStoreCard(store: store),
               const SizedBox(height: 12),
@@ -5182,12 +5439,12 @@ class AdminReservationsPage extends StatelessWidget {
         return ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            const TopBar(title: '全部预约', subtitle: '查看所有商家的预约表单。'),
+            TopBar(title: context.s.allReservationsAdmin, subtitle: context.s.reservationFormShopSubtitle),
             if (appStore.reservations.isEmpty)
-              const EmptyState(
+              EmptyState(
                   icon: Icons.assignment_outlined,
-                  title: '暂无预约',
-                  description: '用户预约后会出现在这里。')
+                  title: context.s.noReservationsYet,
+                  description: context.s.adminReservationsEmptyDesc)
             else
               for (final reservation in appStore.reservations) ...[
                 ReservationCard(reservation: reservation, showActions: true),
@@ -5212,12 +5469,12 @@ class AdminOrdersPage extends StatelessWidget {
         return ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            const TopBar(title: '全部订单', subtitle: '查看所有商家的订单和洗车流程。'),
+            TopBar(title: context.s.allOrdersAdmin, subtitle: context.s.shopOrdersSubtitle),
             if (appStore.orders.isEmpty)
-              const EmptyState(
+              EmptyState(
                   icon: Icons.receipt_long_outlined,
-                  title: '暂无订单',
-                  description: '用户扫码付款后订单会出现在这里。')
+                  title: context.s.noOrdersShopTitle,
+                  description: context.s.adminOrdersEmptyDesc)
             else
               for (final order in appStore.orders) ...[
                 OrderCard(order: order),
@@ -5246,18 +5503,17 @@ class StoreFilterDropdown extends StatelessWidget {
   Widget build(BuildContext context) {
     return DropdownButtonFormField<String>(
       isExpanded: true,
-      value: value,
-      decoration: const InputDecoration(
-        labelText: '店铺筛选',
-        border: OutlineInputBorder(),
+      initialValue: value,
+      decoration: InputDecoration(labelText: context.s.storeFilterLabel,
+        border: const OutlineInputBorder(),
       ),
       items: [
-        const DropdownMenuItem(value: 'all', child: Text('全部店铺')),
+        DropdownMenuItem(value: 'all', child: Text(context.s.allStoresFilter)),
         for (final store in stores)
           DropdownMenuItem(
             value: store.id,
             child: Text(
-              store.name,
+              store.localizedName(),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),
@@ -5286,7 +5542,7 @@ class ProfilePage extends StatelessWidget {
           padding: const EdgeInsets.all(16),
           children: [
             TopBar(
-              title: '个人中心',
+              title: context.s.tabProfile,
               subtitle: '${account.displayName} · ${account.phone}',
             ),
             if (account.role == AccountRole.user) ...[
@@ -5315,7 +5571,7 @@ class ProfilePage extends StatelessWidget {
             FilledButton.tonalIcon(
               onPressed: appStore.logout,
               icon: const Icon(Icons.logout),
-              label: const Text('退出登录'),
+              label: Text(context.s.exitLogin),
             ),
           ],
         );
@@ -5355,17 +5611,18 @@ class TopBar extends StatelessWidget {
                 Text(
                   subtitle,
                   style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: Colors.white.withOpacity(0.9),
+                        color: Colors.white.withValues(alpha: 0.9),
                         height: 1.4,
                       ),
                 ),
               ],
             ),
           ),
+          const LanguageSwitcher(),
           IconButton(
             onPressed: appStore.logout,
             icon: const Icon(Icons.logout_rounded, color: Colors.white),
-            tooltip: '退出登录',
+            tooltip: context.s.exitLogin,
           ),
         ],
       ),
@@ -5398,7 +5655,7 @@ class ReservationCard extends StatelessWidget {
               children: [
                 Expanded(
                   child: Text(
-                    store.name,
+                    store.localizedName(),
                     style: const TextStyle(fontWeight: FontWeight.w800),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
@@ -5413,24 +5670,24 @@ class ReservationCard extends StatelessWidget {
             ),
             const SizedBox(height: 6),
             Text(
-              '用户：${user.displayName} ${reservation.contactPhone}',
+              context.s.reservationUserLine(user.displayName, reservation.contactPhone),
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
             ),
-            Text('预约类型：${reservation.serviceType.label}'),
-            Text('预约到店：${formatDateTime(reservation.arrivalTime)}'),
+            Text(context.s.reservationTypeLine(reservation.serviceType.label)),
+            Text(context.s.reservationArrivalLine(formatDateTime(reservation.arrivalTime))),
             Text(
-              '预计 ${reservation.etaMinutes} 分钟到达，距离 ${reservation.distanceKm.toStringAsFixed(1)} km',
+              context.s.reservationEtaDistanceLine(reservation.etaMinutes, reservation.distanceKm),
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
             ),
             if (reservation.note.isNotEmpty)
               Text(
-                '备注：${reservation.note}',
+                context.s.reservationNoteLine(reservation.note),
                 maxLines: 3,
                 overflow: TextOverflow.ellipsis,
               ),
-            Text('提交时间：${formatTime(reservation.createdAt)}'),
+            Text(context.s.reservationSubmitTimeLine(formatTime(reservation.createdAt))),
             if (showActions) ...[
               const SizedBox(height: 8),
               Wrap(
@@ -5499,7 +5756,7 @@ class ShopStoreCard extends StatelessWidget {
               children: [
                 Expanded(
                   child: Text(
-                    store.name,
+                    store.localizedName(),
                     style: Theme.of(context)
                         .textTheme
                         .titleMedium
@@ -5507,34 +5764,36 @@ class ShopStoreCard extends StatelessWidget {
                   ),
                 ),
                 if (store.approvalStatus == ApprovalStatus.pending)
-                  const StatusPill(text: '待审核', color: Colors.red)
+                  StatusPill(text: context.s.storePendingReview, color: Colors.red)
                 else if (store.approvalStatus == ApprovalStatus.rejected)
-                  const StatusPill(text: '已驳回', color: Colors.grey),
+                  StatusPill(text: context.s.storeRejectedReview, color: Colors.grey),
               ],
             ),
             if (store.adminReply.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.only(top: 4),
                 child: Text(
-                  '平台意见：${store.adminReply}',
+                  context.s.platformOpinionLine(store.adminReply),
                   style: const TextStyle(color: Colors.orange, fontSize: 12),
                 ),
               ),
             const SizedBox(height: 6),
-            Text(store.address),
-            Text('服务类型：${store.serviceSummary}'),
+            Text(store.localizedAddress()),
+            Text(context.s.serviceTypeLine(store.serviceSummary)),
             Text(
-              '累计收款 ¥${appStore.receivedRevenueForCurrentShop(storeId: store.id).toStringAsFixed(0)} · '
-              '已付 ${appStore.paidOrderCountForCurrentShop(storeId: store.id)} 笔',
+context.s.revenueSummary(
+                appStore.receivedRevenueForCurrentShop(storeId: store.id),
+                appStore.paidOrderCountForCurrentShop(storeId: store.id),
+              ),
             ),
             const SizedBox(height: 8),
-            const Text('洗车套餐价格', style: TextStyle(fontWeight: FontWeight.w700)),
+            Text(context.s.washPackagePrices, style: const TextStyle(fontWeight: FontWeight.w700)),
             for (final washPackage in store.packages)
               ListTile(
                 dense: true,
                 contentPadding: EdgeInsets.zero,
-                title: Text(washPackage.name),
-                subtitle: Text('${washPackage.minutes} 分钟'),
+                title: Text(washPackage.localizedName()),
+                subtitle: Text(context.s.minutesLabel(washPackage.minutes)),
                 trailing: OutlinedButton(
                   onPressed: () => _editStorePackagePrice(
                     context,
@@ -5554,7 +5813,7 @@ class ShopStoreCard extends StatelessWidget {
                   ),
                 ),
                 icon: const Icon(Icons.add),
-                label: const Text('添加洗车位'),
+                label: Text(context.s.addWashBaySlot),
               ),
             ],
             const SizedBox(height: 10),
@@ -5570,7 +5829,7 @@ class ShopStoreCard extends StatelessWidget {
                         children: [
                           Expanded(
                             child: Text(
-                              '${device.bayName} · ${device.status.label}',
+                              '${device.localizedBayName()} · ${device.status.label}',
                               style:
                                   const TextStyle(fontWeight: FontWeight.w700),
                             ),
@@ -5579,18 +5838,18 @@ class ShopStoreCard extends StatelessWidget {
                             onSelected: (status) {
                               appStore.markDeviceStatus(device.id, status);
                             },
-                            itemBuilder: (context) => const [
+                            itemBuilder: (menuContext) => [
                               PopupMenuItem(
                                 value: DeviceStatus.idle,
-                                child: Text('设为在线空闲'),
+                                child: Text(menuContext.s.setIdleOnline),
                               ),
                               PopupMenuItem(
                                 value: DeviceStatus.offline,
-                                child: Text('设为离线'),
+                                child: Text(menuContext.s.setOffline),
                               ),
                               PopupMenuItem(
                                 value: DeviceStatus.faulted,
-                                child: Text('设为故障'),
+                                child: Text(menuContext.s.setFault),
                               ),
                             ],
                           ),
@@ -5598,7 +5857,7 @@ class ShopStoreCard extends StatelessWidget {
                       ),
                       const SizedBox(height: 6),
                       Text(
-                        '使用次数 ${device.useCount} · 使用时长 ${formatDurationSeconds(device.totalUseSeconds)} · 故障次数 ${device.faultCount}',
+                        context.s.deviceUsageLine(device.useCount, formatDurationSeconds(device.totalUseSeconds), device.faultCount),
                       ),
                     ],
                   ),
@@ -5636,26 +5895,27 @@ class _AddWashBayPageState extends State<AddWashBayPage> {
   Widget build(BuildContext context) {
     final appStore = AppScope.of(context);
     return Scaffold(
-      appBar: AppBar(title: const Text('添加洗车位')),
+      appBar: AppBar(title: Text(context.s.addWashBaySlot)),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          Text(widget.store.name,
+          Text(widget.store.localizedName(),
               style: const TextStyle(fontWeight: FontWeight.w800)),
           const SizedBox(height: 12),
           AppTextField(
-              controller: bayNameController, label: '工位名称，例如 自助4号 / 人工1号'),
+              controller: bayNameController, label: context.s.bayNameExample),
           DropdownButtonFormField<WashServiceType>(
-            value: serviceType,
-            decoration: const InputDecoration(
-              labelText: '工位类型',
-              border: OutlineInputBorder(),
+            initialValue: serviceType,
+            decoration: InputDecoration(labelText: context.s.bayTypeLabel,
+              border: const OutlineInputBorder(),
             ),
-            items: const [
+            items: [
               DropdownMenuItem(
-                  value: WashServiceType.selfService, child: Text('自助洗车位')),
+                  value: WashServiceType.selfService,
+                  child: Text(context.s.selfServiceBayLabel)),
               DropdownMenuItem(
-                  value: WashServiceType.manual, child: Text('人工洗车位')),
+                  value: WashServiceType.manual,
+                  child: Text(context.s.manualBayLabel)),
             ],
             onChanged: (value) {
               if (value != null) {
@@ -5687,7 +5947,7 @@ class _AddWashBayPageState extends State<AddWashBayPage> {
                     exception.toString().replaceFirst('Bad state: ', ''));
               }
             },
-            child: const Text('添加工位'),
+            child: Text(context.s.addBayButton),
           ),
         ],
       ),
@@ -5756,8 +6016,8 @@ class _AddShopStorePageState extends State<AddShopStorePage> {
         latController.text = result.position.latitude.toStringAsFixed(6);
         lngController.text = result.position.longitude.toStringAsFixed(6);
         geocodingMessage = result.formattedAddress == null
-            ? '已根据地址更新坐标'
-            : '已定位：${result.formattedAddress}';
+            ? context.s.geocodeCoordsUpdated
+            : context.s.geocodeLocated(result.formattedAddress!);
       });
     } on GeocodingException catch (exception) {
       if (!mounted) {
@@ -5768,7 +6028,7 @@ class _AddShopStorePageState extends State<AddShopStorePage> {
       if (!mounted) {
         return;
       }
-      setState(() => geocodingMessage = '定位失败：$error');
+      setState(() => geocodingMessage = context.s.geocodeFailedMsg(error));
     } finally {
       if (mounted) {
         setState(() => geocoding = false);
@@ -5781,14 +6041,14 @@ class _AddShopStorePageState extends State<AddShopStorePage> {
     final appStore = AppScope.of(context);
     final phone = appStore.currentAccount?.phone ?? '';
     return Scaffold(
-      appBar: AppBar(title: const Text('添加新的店铺')),
+      appBar: AppBar(title: Text(context.s.addNewShopBtn)),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          Text('商户电话账号：$phone（不可修改）'),
+          Text(context.s.merchantPhoneLocked(phone)),
           const SizedBox(height: 12),
-          AppTextField(controller: storeNameController, label: '店铺名称'),
-          AppTextField(controller: addressController, label: '店铺地址'),
+          AppTextField(controller: storeNameController, label: context.s.storeNameLabel),
+          AppTextField(controller: addressController, label: context.s.storeAddressLabel),
           if (geocoding) ...[
             const SizedBox(height: 8),
             const LinearProgressIndicator(),
@@ -5803,13 +6063,13 @@ class _AddShopStorePageState extends State<AddShopStorePage> {
           Row(
             children: [
               Expanded(
-                  child: AppTextField(controller: latController, label: '纬度')),
+                  child: AppTextField(controller: latController, label: context.s.latitude)),
               const SizedBox(width: 12),
               Expanded(
-                  child: AppTextField(controller: lngController, label: '经度')),
+                  child: AppTextField(controller: lngController, label: context.s.longitude)),
             ],
           ),
-          const Text('经营许可证材料', style: TextStyle(fontWeight: FontWeight.w700)),
+          Text(context.s.licenseMaterials, style: const TextStyle(fontWeight: FontWeight.w700)),
           const SizedBox(height: 8),
           LicenseUploadSection(
             files: licenseFiles,
@@ -5821,7 +6081,7 @@ class _AddShopStorePageState extends State<AddShopStorePage> {
             }),
           ),
           const SizedBox(height: 8),
-          const Text('服务类型', style: TextStyle(fontWeight: FontWeight.w700)),
+          Text(context.s.serviceTypes, style: const TextStyle(fontWeight: FontWeight.w700)),
           for (final type in sortedWashServiceTypes(serviceTypes))
             CheckboxListTile(
               value: serviceTypes.contains(type),
@@ -5846,15 +6106,15 @@ class _AddShopStorePageState extends State<AddShopStorePage> {
                   lngController.text,
                 ]);
                 if (licenseFiles.isEmpty) {
-                  throw StateError('请上传至少一个经营许可证文件');
+                  throw StateError(context.s.errUploadLicense);
                 }
                 if (serviceTypes.isEmpty) {
-                  throw StateError('至少选择一种服务类型');
+                  throw StateError(context.s.errSelectOneService);
                 }
                 final lat = double.tryParse(latController.text.trim());
                 final lng = double.tryParse(lngController.text.trim());
                 if (lat == null || lng == null) {
-                  throw StateError('经纬度格式不正确');
+                  throw StateError(context.s.errInvalidLatLng);
                 }
                 await appStore.addStoreForCurrentShop(
                   storeName: storeNameController.text,
@@ -5867,14 +6127,14 @@ class _AddShopStorePageState extends State<AddShopStorePage> {
                 if (!context.mounted) return;
                 Navigator.of(context).pop();
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('门店已提交，等待平台审核')),
+                  SnackBar(content: Text(context.s.storeSubmitted)),
                 );
               } on Object catch (exception) {
                 setState(() => error =
                     exception.toString().replaceFirst('Bad state: ', ''));
               }
             },
-            child: const Text('提交新店铺'),
+            child: Text(context.s.submitNewStore),
           ),
         ],
       ),
@@ -5908,7 +6168,7 @@ class DeviceStatusList extends StatelessWidget {
               size: 18,
               color: statusColor(device.status),
             ),
-            label: Text('${device.bayName} ${device.status.label}'),
+            label: Text('${device.localizedBayName()} ${device.status.label}'),
           ),
       ],
     );
@@ -5934,16 +6194,16 @@ class ScanDeviceSummary extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              store.name,
+              store.localizedName(),
               style: Theme.of(context)
                   .textTheme
                   .titleMedium
                   ?.copyWith(fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 8),
-            Text('${device.bayName} · ${device.status.label}'),
+            Text('${device.localizedBayName()} · ${device.status.label}'),
             const SizedBox(height: 8),
-            Text('地址：${store.address}'),
+            Text(context.s.storeAddressLine(store.localizedAddress())),
           ],
         ),
       ),
@@ -5992,11 +6252,11 @@ class PackageOptionCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      '${package.name}  ¥${price.toStringAsFixed(0)}',
+                      '${package.localizedName()}  ¥${price.toStringAsFixed(0)}',
                       style: const TextStyle(fontWeight: FontWeight.w700),
                     ),
                     const SizedBox(height: 4),
-                    Text('${package.minutes} 分钟 · ${package.description}'),
+                    Text(context.s.packageMinutesDesc(package.minutes, package.localizedDescription())),
                   ],
                 ),
               ),
@@ -6030,7 +6290,7 @@ class OrderCard extends StatelessWidget {
               children: [
                 Expanded(
                   child: Text(
-                    washPackage.name,
+                    washPackage.localizedName(),
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
                           fontWeight: FontWeight.w700,
                         ),
@@ -6040,14 +6300,14 @@ class OrderCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 8),
-            Text(store.name),
+            Text(store.localizedName()),
             Text(
               order.usedFreeWashCredit
-                  ? '${device.bayName} · 免费洗车'
-                  : '${device.bayName} · ¥${order.amount.toStringAsFixed(0)}',
+                  ? context.s.freeWashOnOrder(device.localizedBayName())
+                  : '${device.localizedBayName()} · ¥${order.amount.toStringAsFixed(0)}',
             ),
             const SizedBox(height: 6),
-            Text('流程：${order.flowDescription}'),
+            Text(context.s.orderFlowLine(order.flowDescription)),
             if (order.paidAt != null) ...[
               const SizedBox(height: 8),
               Container(
@@ -6061,29 +6321,39 @@ class OrderCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      order.usedFreeWashCredit ? '已核销免费洗车' : '已收款 ¥${order.amount.toStringAsFixed(0)}',
+                      order.usedFreeWashCredit ? context.s.redeemedFreeWash : context.s.paidAmountLine(order.amount),
                       style: TextStyle(
                         fontWeight: FontWeight.w700,
                         color: Colors.green.shade800,
                       ),
                     ),
                     if (order.paymentMethod != null)
-                      Text('支付方式：${order.paymentMethod}'),
+                      Text(context.s.paymentMethodLine(order.paymentMethod!)),
                     if (order.paymentTransactionId != null)
-                      Text('交易号：${order.paymentTransactionId}'),
-                    Text('到账时间：${_formatPaidAt(order.paidAt!)}'),
+                      Text(context.s.transactionIdLine(order.paymentTransactionId!)),
+                    Text(context.s.paidAtLine(_formatPaidAt(order.paidAt!))),
                   ],
                 ),
               ),
             ],
             const SizedBox(height: 8),
-            LinearProgressIndicator(value: _progress(washPackage, order)),
-            const SizedBox(height: 8),
-            Text(
-              order.status == OrderStatus.running
-                  ? '剩余 ${formatSeconds(order.remainingSeconds)}'
-                  : '订单号：${order.id}',
-            ),
+            if (order.status == OrderStatus.running)
+              ListenableBuilder(
+                listenable: appStore.orderTick,
+                builder: (context, _) => Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    LinearProgressIndicator(value: _progress(washPackage, order)),
+                    const SizedBox(height: 8),
+                    Text(context.s.remainingTimeLine(formatSeconds(order.remainingSeconds))),
+                  ],
+                ),
+              )
+            else ...[
+              LinearProgressIndicator(value: _progress(washPackage, order)),
+              const SizedBox(height: 8),
+              Text(context.s.orderIdLine(order.id)),
+            ],
             if (order.failureReason != null) ...[
               const SizedBox(height: 8),
               Text(
@@ -6096,7 +6366,7 @@ class OrderCard extends StatelessWidget {
               FilledButton.tonalIcon(
                 onPressed: () => appStore.simulatePaymentAndStart(order),
                 icon: const Icon(Icons.payments_outlined),
-                label: const Text('模拟付款并启动'),
+                label: Text(context.s.simulatePayStart),
               ),
             ],
             if (order.status == OrderStatus.running) ...[
@@ -6104,7 +6374,7 @@ class OrderCard extends StatelessWidget {
               FilledButton.tonalIcon(
                 onPressed: () => appStore.finishOrder(order),
                 icon: const Icon(Icons.stop_circle_outlined),
-                label: const Text('结束洗车'),
+                label: Text(context.s.finishWash),
               ),
             ],
           ],
@@ -6165,6 +6435,7 @@ class SectionTitle extends StatelessWidget {
                     ),
               ),
             ),
+            const LanguageSwitcherLight(),
           ],
         ),
         const SizedBox(height: 6),
@@ -6249,9 +6520,9 @@ class StatusPill extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.12),
+        color: color.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: color.withOpacity(0.28)),
+        border: Border.all(color: color.withValues(alpha: 0.28)),
       ),
       child: Text(
         text,
@@ -6331,7 +6602,7 @@ class EmptyState extends StatelessWidget {
             Container(
               width: 72,
               height: 72,
-              decoration: BoxDecoration(
+              decoration: const BoxDecoration(
                 color: AppColors.primarySurface,
                 shape: BoxShape.circle,
               ),
@@ -6368,10 +6639,11 @@ extension AccountRoleText on AccountRole {
   }
 
   String get label {
+    final s = AppStrings.current;
     return switch (this) {
-      AccountRole.user => '用户',
-      AccountRole.shop => '商家',
-      AccountRole.admin => '平台管理员',
+      AccountRole.user => s.roleUser,
+      AccountRole.shop => s.roleShop,
+      AccountRole.admin => s.roleAdmin,
     };
   }
 
@@ -6386,10 +6658,11 @@ extension AccountRoleText on AccountRole {
 
 extension ApprovalStatusText on ApprovalStatus {
   String get label {
+    final s = AppStrings.current;
     return switch (this) {
-      ApprovalStatus.pending => '待审核',
-      ApprovalStatus.approved => '已批准',
-      ApprovalStatus.rejected => '已拒绝',
+      ApprovalStatus.pending => s.approvalPending,
+      ApprovalStatus.approved => s.approvalApproved,
+      ApprovalStatus.rejected => s.approvalRejected,
     };
   }
 
@@ -6466,16 +6739,17 @@ class SelfServiceEcoBanner extends StatelessWidget {
 
 extension WashServiceTypeText on WashServiceType {
   String get label {
+    final s = AppStrings.current;
     return switch (this) {
-      WashServiceType.selfService => '自助洗车',
-      WashServiceType.manual => '人工洗车',
+      WashServiceType.selfService => s.selfService,
+      WashServiceType.manual => s.manualService,
     };
   }
 
   String? get ecoSubtitle {
+    final s = AppStrings.current;
     return switch (this) {
-      WashServiceType.selfService =>
-        '每一次自助洗车节省约 60 升到 100 升的水，为环保贡献一份力量！',
+      WashServiceType.selfService => s.selfServiceEco,
       WashServiceType.manual => null,
     };
   }
@@ -6498,25 +6772,27 @@ List<WashServiceType> sortedWashServiceTypes(Set<WashServiceType> serviceTypes) 
 
 extension DeviceStatusText on DeviceStatus {
   String get label {
+    final s = AppStrings.current;
     return switch (this) {
-      DeviceStatus.idle => '空闲',
-      DeviceStatus.busy => '使用中',
-      DeviceStatus.offline => '离线',
-      DeviceStatus.faulted => '故障',
+      DeviceStatus.idle => s.deviceIdle,
+      DeviceStatus.busy => s.deviceBusy,
+      DeviceStatus.offline => s.deviceOffline,
+      DeviceStatus.faulted => s.deviceFaulted,
     };
   }
 }
 
 extension OrderStatusText on OrderStatus {
   String get label {
+    final s = AppStrings.current;
     return switch (this) {
-      OrderStatus.created => '待支付',
-      OrderStatus.paid => '已支付',
-      OrderStatus.starting => '启动中',
-      OrderStatus.running => '洗车中',
-      OrderStatus.completed => '已完成',
-      OrderStatus.failed => '异常',
-      OrderStatus.refunded => '已退款',
+      OrderStatus.created => s.orderStatusCreated,
+      OrderStatus.paid => s.orderStatusPaid,
+      OrderStatus.starting => s.orderStatusStarting,
+      OrderStatus.running => s.orderStatusRunning,
+      OrderStatus.completed => s.orderStatusCompleted,
+      OrderStatus.failed => s.orderStatusFailed,
+      OrderStatus.refunded => s.orderStatusRefunded,
     };
   }
 
@@ -6535,25 +6811,27 @@ extension OrderStatusText on OrderStatus {
 
 extension WashOrderFlowText on WashOrder {
   String get flowDescription {
+    final s = AppStrings.current;
     return switch (status) {
-      OrderStatus.created => '1. 已创建订单，等待扫码或线上付款',
-      OrderStatus.paid => '2. 用户已付款，商家已收款，等待设备启动',
-      OrderStatus.starting => '3. 正在向设备发送启动指令',
-      OrderStatus.running => '4. 洗车中，请按设备提示完成清洗',
-      OrderStatus.completed => '5. 洗车完成，订单已结束',
-      OrderStatus.failed => '异常：设备启动失败或订单异常',
-      OrderStatus.refunded => '已退款，流程结束',
+      OrderStatus.created => s.orderFlow1,
+      OrderStatus.paid => s.orderFlow2,
+      OrderStatus.starting => s.orderFlow3,
+      OrderStatus.running => s.orderFlow4,
+      OrderStatus.completed => s.orderFlow5,
+      OrderStatus.failed => s.orderFlow6,
+      OrderStatus.refunded => s.orderFlow7,
     };
   }
 }
 
 extension ReservationStatusText on ReservationStatus {
   String get label {
+    final s = AppStrings.current;
     return switch (this) {
-      ReservationStatus.pending => '待到店',
-      ReservationStatus.arrived => '已到店',
-      ReservationStatus.completed => '已完成',
-      ReservationStatus.cancelled => '已取消',
+      ReservationStatus.pending => s.resPending,
+      ReservationStatus.arrived => s.resArrived,
+      ReservationStatus.completed => s.resCompleted,
+      ReservationStatus.cancelled => s.resCancelled,
     };
   }
 
@@ -6660,9 +6938,7 @@ String _currentTimeLabel() {
 }
 
 String formatDurationSeconds(int seconds) {
-  final minutes = seconds ~/ 60;
-  final remaining = seconds % 60;
-  return '$minutes分$remaining秒';
+  return AppStrings.current.formatDurationLocalized(seconds);
 }
 
 String _newId(String prefix) {
@@ -6671,6 +6947,6 @@ String _newId(String prefix) {
 
 void _validateRequired(List<String> values) {
   if (values.any((value) => value.trim().isEmpty)) {
-    throw StateError('请填写所有必填信息');
+    throw StateError(AppStrings.current.errFillRequired);
   }
 }

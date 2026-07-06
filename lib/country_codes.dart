@@ -1,3 +1,5 @@
+import 'package:car_washing_app/l10n/app_locale.dart';
+
 /// International dialing codes (E.164) for all countries and common territories.
 class CountryCallingCode {
   const CountryCallingCode({
@@ -12,7 +14,14 @@ class CountryCallingCode {
   final String nameZh;
   final String dialCode;
 
-  String get displayLabel => '$dialCode $nameZh';
+  String localizedName(AppLocale locale) => switch (locale) {
+        AppLocale.en => nameEn,
+        AppLocale.zhHans => nameZh,
+        AppLocale.zhHant => nameZh,
+      };
+
+  String displayLabelFor(AppLocale locale) =>
+      '$dialCode ${localizedName(locale)}';
 
   String get searchText =>
       '$dialCode $nameEn $nameZh $isoCode'.toLowerCase();

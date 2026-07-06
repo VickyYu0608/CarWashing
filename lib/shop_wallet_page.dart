@@ -1,4 +1,6 @@
 import 'package:car_washing_app/app_theme.dart';
+import 'package:car_washing_app/l10n/locale_controller.dart';
+import 'package:car_washing_app/l10n/localized_catalog.dart';
 import 'package:car_washing_app/main.dart';
 import 'package:flutter/material.dart';
 
@@ -22,6 +24,7 @@ class _ShopWalletPageState extends State<ShopWalletPage> {
 
   @override
   Widget build(BuildContext context) {
+    final s = context.s;
     final appStore = AppScope.of(context);
     final account = appStore.currentAccount!;
     return AnimatedBuilder(
@@ -30,7 +33,7 @@ class _ShopWalletPageState extends State<ShopWalletPage> {
         final balance = appStore.shopWalletBalance(account.id);
         final transactions = appStore.walletTransactions;
         return Scaffold(
-          appBar: AppBar(title: const Text('我的钱包')),
+          appBar: AppBar(title: Text(s.myWallet)),
           body: ListView(
             padding: const EdgeInsets.all(16),
             children: [
@@ -42,8 +45,8 @@ class _ShopWalletPageState extends State<ShopWalletPage> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      '可提现余额',
-                      style: TextStyle(color: Colors.white.withOpacity(0.9)),
+                      s.withdrawableBalance,
+                      style: TextStyle(color: Colors.white.withValues(alpha: 0.9)),
                     ),
                     const SizedBox(height: 8),
                     Text(
@@ -61,21 +64,21 @@ class _ShopWalletPageState extends State<ShopWalletPage> {
                         foregroundColor: AppColors.primary,
                       ),
                       onPressed: () => _showWithdraw(context, balance),
-                      child: const Text('提现'),
+                      child: Text(s.withdraw),
                     ),
                   ],
                 ),
               ),
               const SizedBox(height: 20),
-              const Text(
-                '收入明细',
-                style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
+              Text(
+                s.incomeDetails,
+                style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
               ),
               const SizedBox(height: 10),
               if (transactions.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.all(24),
-                  child: Center(child: Text('暂无交易记录')),
+                Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Center(child: Text(s.noTransactions)),
                 )
               else
                 for (final txn in transactions)
@@ -87,7 +90,7 @@ class _ShopWalletPageState extends State<ShopWalletPage> {
                             : Icons.arrow_upward_rounded,
                         size: 40,
                       ),
-                      title: Text(txn.title),
+                      title: Text(txn.localizedTitle()),
                       subtitle: Text(_formatTime(txn.createdAt)),
                       trailing: Text(
                         '${txn.isIncome ? '+' : ''}${txn.amount.toStringAsFixed(2)}',
@@ -106,6 +109,7 @@ class _ShopWalletPageState extends State<ShopWalletPage> {
   }
 
   void _showWithdraw(BuildContext context, double balance) {
+    final s = context.s;
     amountController.text = balance.toStringAsFixed(2);
     showModalBottomSheet(
       context: context,
@@ -121,9 +125,9 @@ class _ShopWalletPageState extends State<ShopWalletPage> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Text(
-              '提现到支付宝',
-              style: TextStyle(fontWeight: FontWeight.w800, fontSize: 18),
+            Text(
+              s.withdrawToAlipay,
+              style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 18),
             ),
             const SizedBox(height: 12),
             TextField(
@@ -131,8 +135,8 @@ class _ShopWalletPageState extends State<ShopWalletPage> {
               keyboardType:
                   const TextInputType.numberWithOptions(decimal: true),
               decoration: InputDecoration(
-                labelText: '提现金额',
-                helperText: '可提现 ¥${balance.toStringAsFixed(2)}',
+                labelText: s.withdrawAmount,
+                helperText: s.withdrawableHelper(balance),
               ),
             ),
             if (error != null) ...[
@@ -144,21 +148,21 @@ class _ShopWalletPageState extends State<ShopWalletPage> {
               onPressed: () {
                 final amount = double.tryParse(amountController.text.trim());
                 if (amount == null) {
-                  setState(() => error = '请输入有效金额');
+                  setState(() => error = s.enterValidAmount);
                   return;
                 }
                 try {
                   AppScope.of(context).withdrawShopWallet(amount);
                   Navigator.pop(context);
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('提现申请已提交')),
+                    SnackBar(content: Text(s.withdrawSubmitted)),
                   );
                 } on Object catch (exception) {
                   setState(() => error =
                       exception.toString().replaceFirst('Bad state: ', ''));
                 }
               },
-              child: const Text('确认提现'),
+              child: Text(s.confirmWithdraw),
             ),
           ],
         ),

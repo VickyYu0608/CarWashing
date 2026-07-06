@@ -1,3 +1,4 @@
+import 'package:car_washing_app/l10n/locale_controller.dart';
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
@@ -26,8 +27,9 @@ class _QrScanPageState extends State<QrScanPage> {
 
   @override
   Widget build(BuildContext context) {
+    final s = context.s;
     return Scaffold(
-      appBar: AppBar(title: const Text('扫码洗车')),
+      appBar: AppBar(title: Text(s.scanCarWashTitle)),
       body: Stack(
         fit: StackFit.expand,
         children: [
@@ -38,10 +40,10 @@ class _QrScanPageState extends State<QrScanPage> {
               width: double.infinity,
               color: Colors.black54,
               padding: const EdgeInsets.all(20),
-              child: const Text(
-                '将设备二维码放入框内自动识别',
+              child: Text(
+                s.scanQrAlignHint,
                 textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.white, fontSize: 15),
+                style: const TextStyle(color: Colors.white, fontSize: 15),
               ),
             ),
           ),

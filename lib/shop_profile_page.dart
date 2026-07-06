@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:car_washing_app/api_config.dart';
 import 'package:car_washing_app/app_theme.dart';
 import 'package:car_washing_app/geocoding_service.dart';
+import 'package:car_washing_app/l10n/app_strings.dart';
+import 'package:car_washing_app/l10n/locale_controller.dart';
 import 'package:car_washing_app/license_file_viewer.dart';
 import 'package:car_washing_app/license_materials_page.dart';
 import 'package:car_washing_app/license_upload.dart';
@@ -22,6 +24,7 @@ class ShopProfilePage extends StatelessWidget {
     return AnimatedBuilder(
       animation: appStore,
       builder: (context, _) {
+        final s = context.s;
         final account = appStore.currentAccount!;
         final storeCount = appStore.storesForCurrentShop().length;
         final balance = appStore.shopWalletBalance(account.id);
@@ -41,14 +44,16 @@ class ShopProfilePage extends StatelessWidget {
                     children: [
                       Expanded(
                         child: _DashboardStatCard(
-                          label: '今日完成',
-                          value: '${appStore.todayCompletedOrderCount} 单',
+                          label: s.todayCompleted,
+                          value: s.todayCompletedValue(
+                            appStore.todayCompletedOrderCount,
+                          ),
                         ),
                       ),
                       const SizedBox(width: 12),
                       Expanded(
                         child: _DashboardStatCard(
-                          label: '今日收入',
+                          label: s.todayRevenue,
                           value: '¥${appStore.todayRevenue.toStringAsFixed(2)}',
                         ),
                       ),
@@ -66,9 +71,9 @@ class ShopProfilePage extends StatelessWidget {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                const Text(
-                                  '钱包余额',
-                                  style: TextStyle(fontWeight: FontWeight.w700),
+                                Text(
+                                  s.walletBalance,
+                                  style: const TextStyle(fontWeight: FontWeight.w700),
                                 ),
                                 Text(
                                   '¥${balance.toStringAsFixed(2)}',
@@ -87,16 +92,16 @@ class ShopProfilePage extends StatelessWidget {
                                 builder: (_) => const ShopWalletPage(),
                               ),
                             ),
-                            child: const Text('查看'),
+                            child: Text(s.viewBtn),
                           ),
                         ],
                       ),
                     ),
                   ),
                   const SizedBox(height: 12),
-                  const Text(
-                    '常用工具',
-                    style: TextStyle(
+                  Text(
+                    s.commonTools,
+                    style: const TextStyle(
                       fontWeight: FontWeight.w800,
                       color: AppColors.textSecondary,
                       fontSize: 13,
@@ -113,7 +118,7 @@ class ShopProfilePage extends StatelessWidget {
                         children: [
                           _ToolItem(
                             icon: Icons.account_balance_wallet_outlined,
-                            label: '钱包',
+                            label: s.walletShort,
                             onTap: () => Navigator.of(context).push(
                               MaterialPageRoute(
                                 builder: (_) => const ShopWalletPage(),
@@ -122,7 +127,7 @@ class ShopProfilePage extends StatelessWidget {
                           ),
                           _ToolItem(
                             icon: Icons.reviews_outlined,
-                            label: '评价',
+                            label: s.reviewsShort,
                             onTap: () => Navigator.of(context).push(
                               MaterialPageRoute(
                                 builder: (_) => const ShopReviewsPage(),
@@ -131,7 +136,7 @@ class ShopProfilePage extends StatelessWidget {
                           ),
                           _ToolItem(
                             icon: Icons.support_agent_outlined,
-                            label: '客服',
+                            label: s.customerServiceShort,
                             onTap: () => Navigator.of(context).push(
                               MaterialPageRoute(
                                 builder: (_) => const CustomerServicePage(),
@@ -140,7 +145,7 @@ class ShopProfilePage extends StatelessWidget {
                           ),
                           _ToolItem(
                             icon: Icons.settings_outlined,
-                            label: '设置',
+                            label: s.settingsShort,
                             onTap: () => _openEdit(context),
                           ),
                         ],
@@ -153,25 +158,25 @@ class ShopProfilePage extends StatelessWidget {
                     const SizedBox(height: 12),
                   ],
                   _ProfileSection(
-                    title: '账户信息',
+                    title: s.accountInfo,
                     children: [
                       _ProfileInfoTile(
                         icon: Icons.badge_outlined,
-                        label: '登录账号',
+                        label: s.loginAccount,
                         value: account.username,
                         onTap: () => _openEdit(context),
                       ),
                       const Divider(height: 1, indent: 56),
                       _ProfileInfoTile(
                         icon: Icons.phone_iphone_outlined,
-                        label: '手机号',
+                        label: s.phone,
                         value: account.phone,
                         onTap: () => _openEdit(context),
                       ),
                       const Divider(height: 1, indent: 56),
                       _ProfileInfoTile(
                         icon: Icons.storefront_outlined,
-                        label: '商户名称',
+                        label: s.merchantName,
                         value: account.displayName,
                         onTap: () => _openEdit(context),
                       ),
@@ -179,13 +184,13 @@ class ShopProfilePage extends StatelessWidget {
                   ),
                   const SizedBox(height: 12),
                   _ProfileSection(
-                    title: '店铺信息',
+                    title: s.shopInfoSection,
                     children: [
                       _ProfileInfoTile(
                         icon: Icons.location_on_outlined,
-                        label: '店铺地址',
+                        label: s.shopAddressLabel,
                         value: account.shopAddress.isEmpty
-                            ? '未填写'
+                            ? s.notFilled
                             : account.shopAddress,
                         onTap: () => _openEdit(context),
                       ),
@@ -194,7 +199,7 @@ class ShopProfilePage extends StatelessWidget {
                         const Divider(height: 1, indent: 56),
                         _ProfileInfoTile(
                           icon: Icons.map_outlined,
-                          label: '地图坐标',
+                          label: s.mapCoordinates,
                           value:
                               '${account.shopLatitude!.toStringAsFixed(4)}, ${account.shopLongitude!.toStringAsFixed(4)}',
                           onTap: () => _openEdit(context),
@@ -203,8 +208,8 @@ class ShopProfilePage extends StatelessWidget {
                       const Divider(height: 1, indent: 56),
                       _ProfileInfoTile(
                         icon: Icons.store_mall_directory_outlined,
-                        label: '管理店铺',
-                        value: '$storeCount 家',
+                        label: s.manageStores,
+                        value: s.storeCountBadge(storeCount),
                         onTap: () => Navigator.of(context).push(
                           MaterialPageRoute(
                             builder: (_) => const ShopStoresPage(),
@@ -215,7 +220,7 @@ class ShopProfilePage extends StatelessWidget {
                   ),
                   const SizedBox(height: 12),
                   _ProfileSection(
-                    title: '经营许可证',
+                    title: s.operatingLicense,
                     children: [
                       Padding(
                         padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
@@ -231,7 +236,7 @@ class ShopProfilePage extends StatelessWidget {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Text(
-                                    '${account.licenseFiles.length} 个文件',
+                                    s.fileCountBadge(account.licenseFiles.length),
                                     style: const TextStyle(
                                       fontWeight: FontWeight.w700,
                                       color: AppColors.textPrimary,
@@ -239,7 +244,7 @@ class ShopProfilePage extends StatelessWidget {
                                   ),
                                   Text(
                                     account.licenseFiles.isEmpty
-                                        ? '请上传经营许可证'
+                                        ? s.uploadBusinessLicense
                                         : account.licenseFiles.join('、'),
                                     maxLines: 2,
                                     overflow: TextOverflow.ellipsis,
@@ -256,14 +261,17 @@ class ShopProfilePage extends StatelessWidget {
                                         MaterialPageRoute(
                                           builder: (context) =>
                                               LicenseMaterialsPage(
-                                            title:
-                                                '${account.displayName} · 许可证',
+                                            title: s.licenseTitleSuffix(
+                                              account.displayName,
+                                            ),
                                             files: account.licenseFiles,
                                           ),
                                         ),
                                       ),
                               child: Text(
-                                account.licenseFiles.isEmpty ? '去上传' : '查看',
+                                account.licenseFiles.isEmpty
+                                    ? s.goUpload
+                                    : s.viewBtn,
                               ),
                             ),
                           ],
@@ -312,13 +320,13 @@ class ShopProfilePage extends StatelessWidget {
                   FilledButton.icon(
                     onPressed: () => _openEdit(context),
                     icon: const Icon(Icons.edit_outlined),
-                    label: const Text('编辑资料'),
+                    label: Text(s.editProfile),
                   ),
                   const SizedBox(height: 10),
                   OutlinedButton.icon(
                     onPressed: appStore.logout,
                     icon: const Icon(Icons.logout_rounded),
-                    label: const Text('退出登录'),
+                    label: Text(s.logout),
                   ),
                 ],
               ),
@@ -427,8 +435,8 @@ class _ShopProfileHeader extends StatelessWidget {
             height: 76,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: Colors.white.withOpacity(0.22),
-              border: Border.all(color: Colors.white.withOpacity(0.5), width: 2),
+              color: Colors.white.withValues(alpha: 0.22),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.5), width: 2),
             ),
             child: const Icon(
               Icons.store_rounded,
@@ -449,7 +457,7 @@ class _ShopProfileHeader extends StatelessWidget {
           Text(
             account.phone,
             style: TextStyle(
-              color: Colors.white.withOpacity(0.9),
+              color: Colors.white.withValues(alpha: 0.9),
               fontSize: 14,
             ),
           ),
@@ -457,9 +465,9 @@ class _ShopProfileHeader extends StatelessWidget {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
             decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.2),
+              color: Colors.white.withValues(alpha: 0.2),
               borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: Colors.white.withOpacity(0.35)),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.35)),
             ),
             child: Text(
               account.approvalStatus.label,
@@ -516,8 +524,7 @@ class _ProfileInfoTile extends StatelessWidget {
     required this.label,
     required this.value,
     required this.onTap,
-    this.showChevron = true,
-  });
+  }) : showChevron = true;
 
   final IconData icon;
   final String label;
@@ -678,9 +685,10 @@ class _ShopProfileEditPageState extends State<ShopProfileEditPage> {
       setState(() {
         latController.text = result.position.latitude.toStringAsFixed(6);
         lngController.text = result.position.longitude.toStringAsFixed(6);
+        final s = context.s;
         geocodingMessage = result.formattedAddress == null
-            ? '已根据地址更新坐标'
-            : '已定位：${result.formattedAddress}';
+            ? s.geocodeCoordsUpdated
+            : s.geocodeLocated(result.formattedAddress!);
       });
     } on GeocodingException catch (exception) {
       if (!mounted) {
@@ -691,7 +699,7 @@ class _ShopProfileEditPageState extends State<ShopProfileEditPage> {
       if (!mounted) {
         return;
       }
-      setState(() => geocodingMessage = '定位失败：$geocodeError');
+      setState(() => geocodingMessage = context.s.geocodeFailedMsg(geocodeError));
     } finally {
       if (mounted) {
         setState(() => geocoding = false);
@@ -712,12 +720,12 @@ class _ShopProfileEditPageState extends State<ShopProfileEditPage> {
         lngController.text,
       ]);
       if (licenseFiles.isEmpty) {
-        throw StateError('请上传至少一个经营许可证文件');
+        throw StateError(AppStrings.current.uploadAtLeastOneLicense);
       }
       final latitude = double.tryParse(latController.text.trim());
       final longitude = double.tryParse(lngController.text.trim());
       if (latitude == null || longitude == null) {
-        throw StateError('经纬度格式不正确');
+        throw StateError(AppStrings.current.latLngFormatInvalid);
       }
       setState(() {
         saving = true;
@@ -737,7 +745,7 @@ class _ShopProfileEditPageState extends State<ShopProfileEditPage> {
         return;
       }
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('资料已保存')),
+        SnackBar(content: Text(context.s.profileSaved)),
       );
       Navigator.of(context).pop();
     } on Object catch (exception) {
@@ -755,29 +763,30 @@ class _ShopProfileEditPageState extends State<ShopProfileEditPage> {
 
   @override
   Widget build(BuildContext context) {
+    final s = context.s;
     return Scaffold(
-      appBar: AppBar(title: const Text('编辑资料')),
+      appBar: AppBar(title: Text(s.editProfile)),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
           Text(
-            '修改后将同步更新店铺信息',
+            s.profileSyncHint,
             style: Theme.of(context).textTheme.bodyMedium,
           ),
           const SizedBox(height: 16),
           _EditSection(
-            title: '账户',
+            title: s.accountSection,
             children: [
-              AppTextField(controller: usernameController, label: '登录账号'),
-              AppTextField(controller: phoneController, label: '手机号'),
-              AppTextField(controller: displayNameController, label: '商户名称'),
+              AppTextField(controller: usernameController, label: s.loginAccount),
+              AppTextField(controller: phoneController, label: s.phone),
+              AppTextField(controller: displayNameController, label: s.merchantName),
             ],
           ),
           const SizedBox(height: 16),
           _EditSection(
-            title: '地址与坐标',
+            title: s.addressAndCoordinates,
             children: [
-              AppTextField(controller: addressController, label: '店铺地址'),
+              AppTextField(controller: addressController, label: s.shopAddressLabel),
               if (geocoding) ...[
                 const SizedBox(height: 8),
                 const LinearProgressIndicator(),
@@ -792,11 +801,11 @@ class _ShopProfileEditPageState extends State<ShopProfileEditPage> {
               Row(
                 children: [
                   Expanded(
-                    child: AppTextField(controller: latController, label: '纬度'),
+                    child: AppTextField(controller: latController, label: s.latitude),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
-                    child: AppTextField(controller: lngController, label: '经度'),
+                    child: AppTextField(controller: lngController, label: s.longitude),
                   ),
                 ],
               ),
@@ -804,7 +813,7 @@ class _ShopProfileEditPageState extends State<ShopProfileEditPage> {
           ),
           const SizedBox(height: 16),
           _EditSection(
-            title: '经营许可证',
+            title: s.operatingLicense,
             children: [
               LicenseUploadSection(
                 files: licenseFiles,
@@ -824,7 +833,7 @@ class _ShopProfileEditPageState extends State<ShopProfileEditPage> {
           const SizedBox(height: 20),
           FilledButton(
             onPressed: saving ? null : _saveProfile,
-            child: Text(saving ? '保存中…' : '保存'),
+            child: Text(saving ? s.saving : s.save),
           ),
         ],
       ),
@@ -868,6 +877,6 @@ class _EditSection extends StatelessWidget {
 
 void _validateShopProfile(List<String> values) {
   if (values.any((value) => value.trim().isEmpty)) {
-    throw StateError('请填写所有必填信息');
+    throw StateError(AppStrings.current.fillAllRequired);
   }
 }

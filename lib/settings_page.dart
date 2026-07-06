@@ -1,4 +1,5 @@
 import 'package:car_washing_app/api_client.dart';
+import 'package:car_washing_app/l10n/locale_controller.dart';
 import 'package:car_washing_app/main.dart';
 import 'package:flutter/material.dart';
 
@@ -37,23 +38,24 @@ class _SettingsPageState extends State<SettingsPage> {
 
   @override
   Widget build(BuildContext context) {
+    final s = context.s;
     final appStore = AppScope.of(context);
     final account = appStore.currentAccount!;
     return Scaffold(
-      appBar: AppBar(title: const Text('个人设置')),
+      appBar: AppBar(title: Text(s.personalSettingsPage)),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          AppTextField(controller: nameController, label: '昵称'),
-          AppTextField(controller: phoneController, label: '手机号'),
+          AppTextField(controller: nameController, label: s.nickname),
+          AppTextField(controller: phoneController, label: s.phone),
           AppTextField(
             controller: passwordController,
-            label: '新密码（留空不修改）',
+            label: s.newPasswordLeaveBlank,
             obscureText: true,
           ),
           if (account.role == AccountRole.user)
             SwitchListTile(
-              title: const Text('自动使用免费洗车'),
+              title: Text(s.autoUseFreeWash),
               value: account.autoUseFreeWash,
               onChanged: (value) {
                 appStore.setAutoUseFreeWash(value);
@@ -97,7 +99,7 @@ class _SettingsPageState extends State<SettingsPage> {
                       }
                       if (!context.mounted) return;
                       ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('设置已保存')),
+                        SnackBar(content: Text(s.settingsSaved)),
                       );
                       Navigator.pop(context);
                     } on Object catch (exception) {
@@ -106,7 +108,7 @@ class _SettingsPageState extends State<SettingsPage> {
                       if (mounted) setState(() => saving = false);
                     }
                   },
-            child: Text(saving ? '保存中…' : '保存'),
+            child: Text(saving ? s.saving : s.save),
           ),
         ],
       ),

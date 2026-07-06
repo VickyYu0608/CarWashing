@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'package:car_washing_app/api_client.dart';
 import 'package:car_washing_app/api_config.dart';
 import 'package:car_washing_app/license_file_viewer.dart';
+import 'package:car_washing_app/l10n/app_strings.dart';
+import 'package:car_washing_app/l10n/locale_controller.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -14,6 +16,7 @@ const _maxFileSize = 10 * 1024 * 1024;
 
 class LicenseUploadService {
   static Future<LicenseUploadResult> pickAndUpload() async {
+    final s = AppStrings.current;
     final result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
       allowedExtensions: _allowedExtensions,
@@ -21,27 +24,27 @@ class LicenseUploadService {
       allowMultiple: false,
     );
     if (result == null || result.files.isEmpty) {
-      throw LicenseUploadException('未选择文件');
+      throw LicenseUploadException(s.noFileSelected);
     }
 
     final picked = result.files.single;
     final originalName = picked.name.trim();
     if (originalName.isEmpty) {
-      throw LicenseUploadException('无法读取文件名');
+      throw LicenseUploadException(s.cannotReadFilename);
     }
 
     final bytes = picked.bytes;
     if (bytes == null || bytes.isEmpty) {
-      throw LicenseUploadException('无法读取文件内容，请重试');
+      throw LicenseUploadException(s.cannotReadFileContent);
     }
     if (bytes.length > _maxFileSize) {
-      throw LicenseUploadException('单个文件不能超过 10MB');
+      throw LicenseUploadException(s.fileTooLarge);
     }
 
     final lower = originalName.toLowerCase();
     final ok = _allowedExtensions.any((ext) => lower.endsWith('.$ext'));
     if (!ok) {
-      throw LicenseUploadException('许可证文件仅支持 pdf、jpg、jpeg、png');
+      throw LicenseUploadException(s.unsupportedLicenseFormat);
     }
 
     return _uploadBytes(originalName, bytes);
@@ -51,6 +54,7 @@ class LicenseUploadService {
     String originalName,
     List<int> bytes,
   ) async {
+    final s = AppStrings.current;
     final uri = Uri.parse('$kApiBaseUrl/api/uploads/license');
     final request = http.MultipartRequest('POST', uri)
       ..headers.addAll({
@@ -73,7 +77,7 @@ class LicenseUploadService {
         final json = jsonDecode(body) as Map<String, dynamic>;
         final storedName = (json['filename'] as String?)?.trim();
         if (storedName == null || storedName.isEmpty) {
-          throw LicenseUploadException('上传成功但服务器未返回文件名');
+          throw LicenseUploadException(s.uploadNoFilename);
         }
         return LicenseUploadResult(
           storedName: storedName,
@@ -82,7 +86,7 @@ class LicenseUploadService {
         );
       }
 
-      var message = '上传失败（${streamed.statusCode}）';
+      var message = s.uploadFailedWithCode(streamed.statusCode);
       try {
         final json = jsonDecode(body) as Map<String, dynamic>;
         final detail = json['detail'];
@@ -97,8 +101,10 @@ class LicenseUploadService {
       rethrow;
     } on Object catch (error) {
       throw LicenseUploadException(
-        '无法连接上传服务，请确认后端已启动（$kApiBaseUrl）。'
-        '${kDebugMode ? ' ($error)' : ''}',
+        s.cannotConnectUpload(
+          kApiBaseUrl,
+          debug: kDebugMode ? ' ($error)' : null,
+        ),
       );
     }
   }
@@ -143,13 +149,13 @@ class LicenseUploadSection extends StatefulWidget {
   const LicenseUploadSection({
     required this.files,
     required this.onChanged,
-    this.emptyHint = '请上传 pdf、jpg、jpeg、png 格式的经营许可证，单个文件不超过 10MB',
+    this.emptyHint,
     super.key,
   });
 
   final List<String> files;
   final ValueChanged<List<String>> onChanged;
-  final String emptyHint;
+  final String? emptyHint;
 
   @override
   State<LicenseUploadSection> createState() => _LicenseUploadSectionState();
@@ -195,6 +201,8 @@ class _LicenseUploadSectionState extends State<LicenseUploadSection> {
 
   @override
   Widget build(BuildContext context) {
+    final s = context.s;
+    final hint = widget.emptyHint ?? s.licenseUploadHint;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -209,14 +217,14 @@ class _LicenseUploadSectionState extends State<LicenseUploadSection> {
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
                   : const Icon(Icons.upload_file),
-              label: Text(uploading ? '上传中…' : '选择并上传文件'),
+              label: Text(uploading ? s.uploading : s.selectAndUpload),
             ),
           ],
         ),
         const SizedBox(height: 8),
         if (widget.files.isEmpty)
           Text(
-            widget.emptyHint,
+            hint,
             style: Theme.of(context).textTheme.bodySmall,
           )
         else ...[
@@ -284,7 +292,7 @@ class _LicenseUploadSectionState extends State<LicenseUploadSection> {
               ),
             ),
             Text(
-              '点击图片可全屏预览',
+              s.tapImageFullPreview,
               style: Theme.of(context).textTheme.bodySmall,
             ),
           ],

@@ -1,4 +1,5 @@
 import 'package:car_washing_app/app_theme.dart';
+import 'package:car_washing_app/l10n/locale_controller.dart';
 import 'package:flutter/material.dart';
 
 enum PaymentMethod { wechat, alipay, simulate }
@@ -19,6 +20,7 @@ class PaymentSheet {
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       builder: (context) {
+        final sheetS = context.s;
         return StatefulBuilder(
           builder: (context, setState) {
             return Padding(
@@ -32,9 +34,9 @@ class PaymentSheet {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const Text(
-                    '确认支付',
-                    style: TextStyle(fontWeight: FontWeight.w800, fontSize: 18),
+                  Text(
+                    sheetS.confirmPayment,
+                    style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 18),
                   ),
                   const SizedBox(height: 8),
                   Text(title, style: Theme.of(context).textTheme.bodyMedium),
@@ -55,26 +57,26 @@ class PaymentSheet {
                   const SizedBox(height: 16),
                   _MethodTile(
                     icon: Icons.chat_bubble_outline,
-                    label: '微信支付',
+                    label: sheetS.paymentMethodWechat,
                     selected: method == PaymentMethod.wechat,
                     onTap: () => setState(() => method = PaymentMethod.wechat),
                   ),
                   _MethodTile(
                     icon: Icons.account_balance_wallet_outlined,
-                    label: '支付宝',
+                    label: sheetS.paymentMethodAlipay,
                     selected: method == PaymentMethod.alipay,
                     onTap: () => setState(() => method = PaymentMethod.alipay),
                   ),
                   _MethodTile(
                     icon: Icons.developer_mode_outlined,
-                    label: '模拟支付（测试）',
+                    label: sheetS.simulatePaymentTest,
                     selected: method == PaymentMethod.simulate,
                     onTap: () => setState(() => method = PaymentMethod.simulate),
                   ),
                   const SizedBox(height: 16),
                   FilledButton(
                     onPressed: () => Navigator.pop(context, true),
-                    child: const Text('确认支付'),
+                    child: Text(sheetS.confirmPayment),
                   ),
                 ],
               ),

@@ -1,3 +1,4 @@
+import 'package:car_washing_app/l10n/locale_controller.dart';
 import 'package:car_washing_app/payment/payment_models.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -65,6 +66,7 @@ class _AlipayPayCashierPageState extends State<AlipayPayCashierPage> {
 
   @override
   Widget build(BuildContext context) {
+    final s = context.s;
     return Scaffold(
       backgroundColor: const Color(0xfff5f5f5),
       appBar: AppBar(
@@ -88,7 +90,7 @@ class _AlipayPayCashierPageState extends State<AlipayPayCashierPage> {
               ),
             ),
             const SizedBox(width: 8),
-            const Text('支付宝'),
+            Text(s.paymentMethodAlipay),
           ],
         ),
         leading: IconButton(
@@ -127,10 +129,10 @@ class _AlipayPayCashierPageState extends State<AlipayPayCashierPage> {
                   style: const TextStyle(color: Colors.black45),
                 ),
                 const SizedBox(height: 28),
-                const Text(
-                  '请输入支付密码',
+                Text(
+                  s.enterPayPassword,
                   textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 15, color: Colors.black87),
+                  style: const TextStyle(fontSize: 15, color: Colors.black87),
                 ),
                 const SizedBox(height: 18),
                 Row(

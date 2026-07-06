@@ -1,5 +1,6 @@
 import 'package:car_washing_app/api_config.dart';
 import 'package:car_washing_app/app_theme.dart';
+import 'package:car_washing_app/l10n/locale_controller.dart';
 import 'package:flutter/material.dart';
 
 class LicenseImageFullScreenPage extends StatelessWidget {
@@ -12,6 +13,7 @@ class LicenseImageFullScreenPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final s = context.s;
     final url = licenseFileUrl(filename);
     return Scaffold(
       backgroundColor: Colors.black,
@@ -50,7 +52,7 @@ class LicenseImageFullScreenPage extends StatelessWidget {
                         color: Colors.white70, size: 48),
                     const SizedBox(height: 12),
                     Text(
-                      '图片加载失败\n请确认文件已上传且后端正在运行',
+                      s.imageLoadFailed,
                       textAlign: TextAlign.center,
                       style: TextStyle(color: Colors.grey.shade400),
                     ),
@@ -109,6 +111,7 @@ class _ImagePreviewCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final s = context.s;
     final url = licenseFileUrl(filename);
     return Card(
       clipBehavior: Clip.antiAlias,
@@ -147,7 +150,7 @@ class _ImagePreviewCard extends StatelessWidget {
                             ),
                             const SizedBox(height: 8),
                             Text(
-                              '图片无法加载',
+                              s.imageCannotLoad,
                               style: TextStyle(
                                 color: Theme.of(context).colorScheme.error,
                                 fontWeight: FontWeight.w600,
@@ -155,7 +158,7 @@ class _ImagePreviewCard extends StatelessWidget {
                             ),
                             const SizedBox(height: 4),
                             Text(
-                              '文件可能尚未上传到服务器',
+                              s.fileNotUploadedYet,
                               textAlign: TextAlign.center,
                               style: Theme.of(context).textTheme.bodySmall,
                             ),
@@ -172,19 +175,19 @@ class _ImagePreviewCard extends StatelessWidget {
                         color: Colors.black54,
                         borderRadius: BorderRadius.circular(20),
                       ),
-                      child: const Padding(
-                        padding: EdgeInsets.symmetric(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
                           horizontal: 10,
                           vertical: 4,
                         ),
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Icon(Icons.zoom_in, color: Colors.white, size: 16),
-                            SizedBox(width: 4),
+                            const Icon(Icons.zoom_in, color: Colors.white, size: 16),
+                            const SizedBox(width: 4),
                             Text(
-                              '点击放大',
-                              style: TextStyle(color: Colors.white, fontSize: 12),
+                              s.tapToZoom,
+                              style: const TextStyle(color: Colors.white, fontSize: 12),
                             ),
                           ],
                         ),
@@ -224,12 +227,13 @@ class _PdfPreviewCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final s = context.s;
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(20),
         child: Column(
           children: [
-            Icon(
+            const Icon(
               Icons.picture_as_pdf,
               size: 56,
               color: AppColors.primary,
@@ -242,7 +246,7 @@ class _PdfPreviewCard extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text(
-              'PDF 文件暂不支持 App 内预览，请上传 jpg/png 图片格式以便在手机上直接查看。',
+              s.pdfNoPreview,
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodySmall,
             ),

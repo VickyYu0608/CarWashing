@@ -1,3 +1,5 @@
+import 'package:car_washing_app/l10n/app_strings.dart';
+
 enum PaymentMethod {
   alipay,
   wechatPay,
@@ -29,26 +31,35 @@ enum PaymentSessionStatus {
 }
 
 extension PaymentMethodLabel on PaymentMethod {
-  String get label => switch (this) {
-        PaymentMethod.alipay => 'Alipay 支付宝',
-        PaymentMethod.wechatPay => 'WeChat Pay 微信支付',
-        PaymentMethod.applePay => 'Apple Pay',
-        PaymentMethod.creditCard => '信用卡 Credit Card',
-      };
+  String get label {
+    final s = AppStrings.current;
+    return switch (this) {
+      PaymentMethod.alipay => s.paymentMethodAlipay,
+      PaymentMethod.wechatPay => s.paymentMethodWechat,
+      PaymentMethod.applePay => s.paymentMethodApplePay,
+      PaymentMethod.creditCard => s.paymentMethodCreditCard,
+    };
+  }
 
-  String get subtitle => switch (this) {
-        PaymentMethod.alipay => '跳转支付宝收银台，显示金额并输入支付密码',
-        PaymentMethod.wechatPay => '跳转微信收银台，显示金额并输入支付密码',
-        PaymentMethod.applePay => 'Face ID / Touch ID 确认支付',
-        PaymentMethod.creditCard => 'Visa · Mastercard · UnionPay',
-      };
+  String get subtitle {
+    final s = AppStrings.current;
+    return switch (this) {
+      PaymentMethod.alipay => s.paymentMethodAlipayRedirect,
+      PaymentMethod.wechatPay => s.paymentMethodWechatRedirect,
+      PaymentMethod.applePay => s.paymentMethodApplePayBiometric,
+      PaymentMethod.creditCard => s.paymentMethodCreditCardBrands,
+    };
+  }
 
-  String get providerName => switch (this) {
-        PaymentMethod.alipay => '支付宝',
-        PaymentMethod.wechatPay => '微信支付',
-        PaymentMethod.applePay => 'Apple Pay',
-        PaymentMethod.creditCard => '发卡银行',
-      };
+  String get providerName {
+    final s = AppStrings.current;
+    return switch (this) {
+      PaymentMethod.alipay => s.paymentProviderAlipay,
+      PaymentMethod.wechatPay => s.paymentProviderWechat,
+      PaymentMethod.applePay => s.paymentProviderApplePay,
+      PaymentMethod.creditCard => s.paymentProviderBank,
+    };
+  }
 }
 
 class PaymentSession {
@@ -230,10 +241,10 @@ class ProviderAuthorizationResult {
       ProviderAuthorizationResult(approved: false, errorMessage: message);
 
   factory ProviderAuthorizationResult.cancelled() =>
-      const ProviderAuthorizationResult(
+      ProviderAuthorizationResult(
         approved: false,
         userCancelled: true,
-        errorMessage: '您已取消支付',
+        errorMessage: AppStrings.current.paymentCancelled,
       );
 }
 
