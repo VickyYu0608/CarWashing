@@ -59,7 +59,7 @@ class ApiClient {
   static Future<T> _request<T>(
     Future<http.Response> Function() call,
     T Function(http.Response response) onSuccess, {
-    Duration timeout = const Duration(seconds: 20),
+    Duration timeout = const Duration(seconds: 8),
   }) async {
     try {
       final response = await call().timeout(timeout);
@@ -100,14 +100,14 @@ class ApiClient {
         accessToken = json['access_token'] as String?;
         return json;
       },
-      timeout: const Duration(seconds: 5),
+      timeout: const Duration(seconds: 3),
     );
   }
 
   static Future<Map<String, dynamic>> getMe() => _request(
         () => _client.get(Uri.parse(apiUrl('/api/auth/me')), headers: _headers()),
         (r) => jsonDecode(r.body) as Map<String, dynamic>,
-        timeout: const Duration(seconds: 5),
+        timeout: const Duration(seconds: 3),
       );
 
   static Future<Map<String, dynamic>> updateMe(Map<String, dynamic> body) =>
@@ -217,6 +217,7 @@ class ApiClient {
   static Future<List<Map<String, dynamic>>> fetchStores() => _request(
         () => _client.get(Uri.parse(apiUrl('/api/stores')), headers: _headers()),
         (r) => (jsonDecode(r.body) as List<dynamic>).cast<Map<String, dynamic>>(),
+        timeout: const Duration(seconds: 6),
       );
 
   static Future<List<Map<String, dynamic>>> fetchMyStores() => _request(
@@ -225,11 +226,13 @@ class ApiClient {
           headers: _headers(),
         ),
         (r) => (jsonDecode(r.body) as List<dynamic>).cast<Map<String, dynamic>>(),
+        timeout: const Duration(seconds: 6),
       );
 
   static Future<List<Map<String, dynamic>>> fetchOrders() => _request(
         () => _client.get(Uri.parse(apiUrl('/api/orders')), headers: _headers()),
         (r) => (jsonDecode(r.body) as List<dynamic>).cast<Map<String, dynamic>>(),
+        timeout: const Duration(seconds: 6),
       );
 
   static Future<Map<String, dynamic>> createOrder(Map<String, dynamic> body) =>
@@ -338,6 +341,7 @@ class ApiClient {
           headers: _headers(),
         ),
         (r) => (jsonDecode(r.body) as List<dynamic>).cast<Map<String, dynamic>>(),
+        timeout: const Duration(seconds: 6),
       );
 
   static Future<Map<String, dynamic>> createReservation(
@@ -435,13 +439,14 @@ class ApiClient {
   static Future<List<Map<String, dynamic>>> fetchReviews() => _request(
         () => _client.get(Uri.parse(apiUrl('/api/reviews')), headers: _headers()),
         (r) => (jsonDecode(r.body) as List<dynamic>).cast<Map<String, dynamic>>(),
+        timeout: const Duration(seconds: 6),
       );
 
   static Future<bool> checkHealth() async {
     try {
       final response = await http
           .get(Uri.parse(apiUrl('/health')))
-          .timeout(const Duration(seconds: 5));
+          .timeout(const Duration(seconds: 2));
       return response.statusCode == 200;
     } on Object {
       return false;
@@ -473,6 +478,7 @@ class ApiClient {
   static Future<List<Map<String, dynamic>>> fetchBundles() => _request(
         () => _client.get(Uri.parse(apiUrl('/api/bundles')), headers: _headers()),
         (r) => (jsonDecode(r.body) as List<dynamic>).cast<Map<String, dynamic>>(),
+        timeout: const Duration(seconds: 6),
       );
 
   static Future<Map<String, dynamic>> purchaseBundle(String planId) => _request(
@@ -490,6 +496,7 @@ class ApiClient {
           headers: _headers(),
         ),
         (r) => jsonDecode(r.body) as Map<String, dynamic>,
+        timeout: const Duration(seconds: 6),
       );
 
   static Future<Map<String, dynamic>> updateStoreApproval({

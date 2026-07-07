@@ -13,7 +13,7 @@ class ShopReviewsPage extends StatefulWidget {
 
 class _ShopReviewsPageState extends State<ShopReviewsPage> {
   List<Map<String, dynamic>> reviews = [];
-  bool loading = true;
+  bool refreshing = false;
 
   @override
   void initState() {
@@ -22,6 +22,8 @@ class _ShopReviewsPageState extends State<ShopReviewsPage> {
   }
 
   Future<void> _load() async {
+    if (!mounted) return;
+    setState(() => refreshing = true);
     try {
       if (ApiClient.accessToken != null) {
         reviews = await ApiClient.fetchReviews();
@@ -29,7 +31,7 @@ class _ShopReviewsPageState extends State<ShopReviewsPage> {
     } on Object {
       // ignore
     } finally {
-      if (mounted) setState(() => loading = false);
+      if (mounted) setState(() => refreshing = false);
     }
   }
 
@@ -37,12 +39,25 @@ class _ShopReviewsPageState extends State<ShopReviewsPage> {
   Widget build(BuildContext context) {
     final s = context.s;
     return Scaffold(
-      appBar: AppBar(title: Text(s.myReviews)),
-      body: loading
-          ? const Center(child: CircularProgressIndicator())
-          : reviews.isEmpty
-              ? Center(child: Text(s.noReviews))
-              : ListView.separated(
+      appBar: AppBar(
+        title: Text(s.myReviews),
+        actions: [
+          if (refreshing)
+            const Padding(
+              padding: EdgeInsets.only(right: 16),
+              child: Center(
+                child: SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              ),
+            ),
+        ],
+      ),
+      body: reviews.isEmpty
+          ? Center(child: Text(refreshing ? s.syncingData : s.noReviews))
+          : ListView.separated(
                   padding: const EdgeInsets.all(16),
                   itemCount: reviews.length,
                   separatorBuilder: (_, __) => const SizedBox(height: 10),

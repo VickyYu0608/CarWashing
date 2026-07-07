@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:car_washing_app/api_client.dart';
 import 'package:car_washing_app/app_theme.dart';
 import 'package:car_washing_app/l10n/locale_controller.dart';
@@ -26,10 +28,13 @@ class _AdminApprovalPageState extends State<AdminApprovalPage> {
   }
 
   Future<void> _refresh() async {
-    setState(() => _loading = true);
+    final firstLoad = _pending == null;
+    if (firstLoad && mounted) {
+      setState(() => _loading = true);
+    }
     try {
       _pending = await ApiClient.fetchAdminPending();
-      await AppScope.of(context).syncAccountsFromBackend();
+      unawaited(AppScope.of(context).syncAccountsFromBackend());
     } on Object {
       // keep local
     }

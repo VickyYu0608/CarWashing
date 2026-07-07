@@ -27,7 +27,7 @@ class _BundlePurchasePageState extends State<BundlePurchasePage> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+    _load();
   }
 
   Future<void> _load() async {
@@ -41,18 +41,19 @@ class _BundlePurchasePageState extends State<BundlePurchasePage> {
       return;
     }
 
+    final hasCachedPlans = appStore.bundlePlans.isNotEmpty;
     setState(() {
-      loading = true;
+      loading = !hasCachedPlans;
       error = null;
     });
     try {
-      await appStore.refreshBundlePlans();
+      await appStore.fetchBundlePlans(force: !hasCachedPlans);
       if (!mounted) return;
       setState(() => loading = false);
     } on Object catch (e) {
       if (!mounted) return;
       setState(() {
-        error = e.toString();
+        error = hasCachedPlans ? null : e.toString();
         loading = false;
       });
     }
@@ -129,7 +130,7 @@ class _BundlePurchasePageState extends State<BundlePurchasePage> {
       listenable: Listenable.merge([appStore, localeController]),
       builder: (context, _) {
         final account = appStore.currentAccount;
-        if (loading && appStore.shouldFetchBundlePlansFromBackend) {
+        if (loading && appStore.bundlePlans.isEmpty) {
           return const Center(child: CircularProgressIndicator());
         }
         return RefreshIndicator(

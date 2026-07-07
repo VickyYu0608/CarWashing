@@ -344,6 +344,9 @@ class AppStore extends ChangeNotifier {
       ValueNotifier(const AppSyncUiState());
   List<CarWashStore>? _approvedStoresCache;
   Timer? _washTimer;
+  DateTime? _bundlePlansFetchedAt;
+
+  static const Set<String> _demoUsernames = {'user', 'shop', 'admin'};
 
   void _publishSyncUi({bool clearError = false}) {
     syncUi.value = AppSyncUiState(
@@ -360,6 +363,19 @@ class AppStore extends ChangeNotifier {
   Future<bool> login(String username, String password) async {
     lastAuthMessage = null;
     final trimmed = username.trim();
+
+    if (_demoUsernames.contains(trimmed)) {
+      if (_loginLocal(trimmed, password)) {
+        if (_shouldUseBackendApi()) {
+          unawaited(_syncBackendLogin(trimmed, password));
+        }
+        return true;
+      }
+      lastAuthMessage = AppStrings.current.accountMismatch;
+      notifyListeners();
+      return false;
+    }
+
     if (!_shouldUseBackendApi()) {
       return _loginLocal(trimmed, password);
     }
@@ -384,12 +400,12 @@ class AppStore extends ChangeNotifier {
       if (account.role == AccountRole.admin) {
         unawaited(syncAccountsFromBackend());
       } else {
-        unawaited(syncFromBackend());
+        unawaited(syncFromBackend(silent: true));
       }
       notifyListeners();
       return true;
     } on ApiConnectionException {
-      if (trimmed == 'user' || trimmed == 'shop' || trimmed == 'admin') {
+      if (_demoUsernames.contains(trimmed)) {
         return _loginLocal(trimmed, password);
       }
       lastAuthMessage = AppStrings.current.backendUnreachable;
@@ -399,6 +415,31 @@ class AppStore extends ChangeNotifier {
       lastAuthMessage = exception.message;
       notifyListeners();
       return false;
+    }
+  }
+
+  Future<void> _syncBackendLogin(String username, String password) async {
+    try {
+      await ApiClient.login(username, password);
+      final me = await ApiClient.getMe();
+      final account = _upsertAccountFromApi(me, password: password);
+      if (currentAccount?.username != username) {
+        return;
+      }
+      if (account.approvalStatus != ApprovalStatus.approved &&
+          account.role != AccountRole.shop) {
+        return;
+      }
+      currentAccount = account;
+      lastReservationPhone ??= account.phone;
+      if (account.role == AccountRole.admin) {
+        unawaited(syncAccountsFromBackend());
+      } else {
+        unawaited(syncFromBackend(silent: true));
+      }
+      notifyListeners();
+    } on Object {
+      // Keep the instant local session when backend is slow or offline.
     }
   }
 
@@ -429,14 +470,16 @@ class AppStore extends ChangeNotifier {
     return false;
   }
 
-  Future<void> syncFromBackend() async {
+  Future<void> syncFromBackend({bool silent = false}) async {
     if (ApiClient.accessToken == null || currentAccount == null || isSyncing) {
       return;
     }
     isSyncing = true;
     lastSyncError = null;
-    _publishSyncUi(clearError: true);
-    notifyListeners();
+    if (!silent) {
+      _publishSyncUi(clearError: true);
+      notifyListeners();
+    }
     try {
       final account = currentAccount!;
       final storeJson = account.role == AccountRole.shop
@@ -448,23 +491,33 @@ class AppStore extends ChangeNotifier {
       _touchCatalog();
       lastSyncError = null;
       isSyncing = false;
-      _publishSyncUi(clearError: true);
+      if (!silent) {
+        _publishSyncUi(clearError: true);
+      }
       notifyListeners();
 
       unawaited(_syncSecondaryCatalogData());
       unawaited(_syncSecondaryProfileData(account));
     } on ApiException catch (exception) {
       lastSyncError = exception.message;
-      _publishSyncUi();
+      if (!silent) {
+        _publishSyncUi();
+      }
     } on ApiConnectionException catch (exception) {
       lastSyncError = exception.message;
-      _publishSyncUi();
+      if (!silent) {
+        _publishSyncUi();
+      }
     } on Object catch (error) {
       lastSyncError = error.toString();
-      _publishSyncUi();
+      if (!silent) {
+        _publishSyncUi();
+      }
     } finally {
       isSyncing = false;
-      _publishSyncUi();
+      if (!silent) {
+        _publishSyncUi();
+      }
       notifyListeners();
     }
   }
@@ -732,18 +785,26 @@ class AppStore extends ChangeNotifier {
     };
   }
 
-  Future<List<Map<String, dynamic>>> fetchBundlePlans() async {
+  Future<List<Map<String, dynamic>>> fetchBundlePlans({bool force = false}) async {
     if (!shouldFetchBundlePlansFromBackend) {
+      return List<Map<String, dynamic>>.from(bundlePlans);
+    }
+    final fetchedAt = _bundlePlansFetchedAt;
+    if (!force &&
+        fetchedAt != null &&
+        bundlePlans.isNotEmpty &&
+        DateTime.now().difference(fetchedAt) < const Duration(seconds: 30)) {
       return List<Map<String, dynamic>>.from(bundlePlans);
     }
     final remote = await ApiClient.fetchBundles();
     bundlePlans = remote;
+    _bundlePlansFetchedAt = DateTime.now();
     notifyListeners();
     return remote;
   }
 
   /// Always refetches bundle pricing from the API (e.g. after shop edits prices).
-  Future<void> refreshBundlePlans() => fetchBundlePlans();
+  Future<void> refreshBundlePlans() => fetchBundlePlans(force: true);
 
   Future<void> updateBundlePlan(
     String planId,
@@ -2193,7 +2254,7 @@ class AuthGate extends StatelessWidget {
       builder: (context, _) {
         final account = store.currentAccount;
         return AnimatedSwitcher(
-          duration: const Duration(milliseconds: 320),
+          duration: const Duration(milliseconds: 180),
           switchInCurve: Curves.easeOutCubic,
           switchOutCurve: Curves.easeInCubic,
           transitionBuilder: appTabTransitionBuilder,
@@ -3548,7 +3609,7 @@ class _UserShellState extends State<UserShell> {
         onDestinationSelected: (value) {
           setState(() => index = value);
           if (value == 1) {
-            unawaited(AppScope.of(context).refreshBundlePlans());
+            unawaited(AppScope.of(context).fetchBundlePlans());
           }
         },
         destinations: [
@@ -3900,7 +3961,6 @@ class _UserHomePageState extends State<UserHomePage> {
   LatLng userLocation = fallbackUserLocation;
   CarWashStore? selectedStore;
   bool locating = false;
-  bool mapReady = true;
   String locationMessage = AppStrings.current.locationSuccessSorted;
 
   @override
@@ -3973,7 +4033,6 @@ class _UserHomePageState extends State<UserHomePage> {
                   child: RepaintBoundary(
                     child: _UserHomeMapPanel(
                       mapKey: mapKey,
-                      mapReady: mapReady,
                       userLocation: userLocation,
                       selectedStore: selectedStore,
                       locating: locating,
@@ -4148,7 +4207,6 @@ class _UserHomePageState extends State<UserHomePage> {
 class _UserHomeMapPanel extends StatefulWidget {
   const _UserHomeMapPanel({
     required this.mapKey,
-    required this.mapReady,
     required this.userLocation,
     required this.selectedStore,
     required this.locating,
@@ -4158,7 +4216,6 @@ class _UserHomeMapPanel extends StatefulWidget {
   });
 
   final GlobalKey<CarWashMapViewState> mapKey;
-  final bool mapReady;
   final LatLng userLocation;
   final CarWashStore? selectedStore;
   final bool locating;
@@ -4189,7 +4246,6 @@ class _UserHomeMapPanelState extends State<_UserHomeMapPanel> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.userLocation != widget.userLocation ||
         oldWidget.selectedStore?.id != widget.selectedStore?.id ||
-        oldWidget.mapReady != widget.mapReady ||
         _storeIdsChanged(oldWidget.stores, widget.stores)) {
       _rebuildOverlays();
     }
@@ -4260,26 +4316,6 @@ class _UserHomeMapPanelState extends State<_UserHomeMapPanel> {
 
   @override
   Widget build(BuildContext context) {
-    if (!widget.mapReady) {
-      return SizedBox(
-        height: 220,
-        child: Card(
-          child: Center(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const CircularProgressIndicator(),
-                const SizedBox(height: 12),
-                Text(
-                  widget.locationMessage,
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
-    }
     return CarWashMapView(
       key: widget.mapKey,
       height: 220,

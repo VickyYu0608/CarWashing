@@ -24,24 +24,40 @@ class BundlePricingPage extends StatefulWidget {
 }
 
 class _BundlePricingPageState extends State<BundlePricingPage> {
-  List<Map<String, dynamic>> plans = [];
-  bool loading = true;
+  late List<Map<String, dynamic>> plans;
+  bool loading = false;
+  bool refreshing = false;
 
   @override
   void initState() {
     super.initState();
+    final cached = AppScope.of(context).bundlePlans;
+    plans = cached.isNotEmpty
+        ? List<Map<String, dynamic>>.from(cached)
+        : List<Map<String, dynamic>>.from(AppStore.bundlePlanSpecs);
     _load();
   }
 
   Future<void> _load() async {
-    setState(() => loading = true);
+    if (!mounted) return;
+    setState(() => refreshing = plans.isEmpty);
     final appStore = AppScope.of(context);
     try {
-      plans = await appStore.fetchBundlePlans();
+      final remote = await appStore.fetchBundlePlans(force: plans.isEmpty);
+      if (!mounted) return;
+      setState(() {
+        plans = remote;
+        refreshing = false;
+      });
     } on Object {
-      plans = List<Map<String, dynamic>>.from(AppStore.bundlePlanSpecs);
+      if (!mounted) return;
+      setState(() {
+        if (plans.isEmpty) {
+          plans = List<Map<String, dynamic>>.from(AppStore.bundlePlanSpecs);
+        }
+        refreshing = false;
+      });
     }
-    if (mounted) setState(() => loading = false);
   }
 
   Future<void> _editPlan(Map<String, dynamic> plan) async {
@@ -224,7 +240,7 @@ class _BundlePricingPageState extends State<BundlePricingPage> {
                 ),
           ),
           const SizedBox(height: 12),
-          if (loading)
+          if (refreshing && plans.isEmpty)
             const Center(
               child: Padding(
                 padding: EdgeInsets.all(32),
