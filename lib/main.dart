@@ -29,6 +29,7 @@ import 'package:car_washing_app/l10n/app_locale.dart';
 import 'package:car_washing_app/l10n/app_strings.dart';
 import 'package:car_washing_app/l10n/locale_controller.dart';
 import 'package:car_washing_app/l10n/localized_catalog.dart';
+import 'package:car_washing_app/widgets/app_performance.dart';
 import 'package:car_washing_app/widgets/language_switcher.dart';
 import 'package:car_washing_app/widgets/ui_motion.dart';
 import 'package:flutter/material.dart';
@@ -338,7 +339,23 @@ class AppStore extends ChangeNotifier {
   bool isSyncing = false;
   String? lastSyncError;
   final ValueNotifier<int> orderTick = ValueNotifier(0);
+  final ValueNotifier<int> catalogTick = ValueNotifier(0);
+  final ValueNotifier<AppSyncUiState> syncUi =
+      ValueNotifier(const AppSyncUiState());
+  List<CarWashStore>? _approvedStoresCache;
   Timer? _washTimer;
+
+  void _publishSyncUi({bool clearError = false}) {
+    syncUi.value = AppSyncUiState(
+      isSyncing: isSyncing,
+      lastSyncError: clearError ? null : lastSyncError,
+    );
+  }
+
+  void _touchCatalog() {
+    _approvedStoresCache = null;
+    catalogTick.value++;
+  }
 
   Future<bool> login(String username, String password) async {
     lastAuthMessage = null;
@@ -418,6 +435,7 @@ class AppStore extends ChangeNotifier {
     }
     isSyncing = true;
     lastSyncError = null;
+    _publishSyncUi(clearError: true);
     notifyListeners();
     try {
       final account = currentAccount!;
@@ -433,7 +451,7 @@ class AppStore extends ChangeNotifier {
       final storeJson = results[0];
       final orderJson = results[1];
       final resJson = results[2];
-      final bundleJson = results[3] as List<Map<String, dynamic>>;
+      final bundleJson = results[3];
 
       stores
         ..clear()
@@ -445,7 +463,30 @@ class AppStore extends ChangeNotifier {
         ..clear()
         ..addAll(AppSync.parseReservations(resJson));
       bundlePlans = bundleJson;
+      _touchCatalog();
+      lastSyncError = null;
+      _publishSyncUi(clearError: true);
+      notifyListeners();
 
+      unawaited(_syncSecondaryProfileData(account));
+    } on ApiException catch (exception) {
+      lastSyncError = exception.message;
+      _publishSyncUi();
+    } on ApiConnectionException catch (exception) {
+      lastSyncError = exception.message;
+      _publishSyncUi();
+    } on Object catch (error) {
+      lastSyncError = error.toString();
+      _publishSyncUi();
+    } finally {
+      isSyncing = false;
+      _publishSyncUi();
+      notifyListeners();
+    }
+  }
+
+  Future<void> _syncSecondaryProfileData(AppAccount account) async {
+    try {
       if (account.role == AccountRole.user) {
         final profileResults = await Future.wait([
           ApiClient.fetchVehicles(),
@@ -470,16 +511,9 @@ class AppStore extends ChangeNotifier {
             ),
           );
       }
-      lastSyncError = null;
-    } on ApiException catch (exception) {
-      lastSyncError = exception.message;
-    } on ApiConnectionException catch (exception) {
-      lastSyncError = exception.message;
-    } on Object catch (error) {
-      lastSyncError = error.toString();
-    } finally {
-      isSyncing = false;
       notifyListeners();
+    } on Object {
+      // Profile/wallet data is non-blocking for the main UI.
     }
   }
 
@@ -1337,11 +1371,46 @@ class AppStore extends ChangeNotifier {
   }
 
   List<CarWashStore> approvedStores() {
-    return stores.where((store) {
+    final cached = _approvedStoresCache;
+    if (cached != null) {
+      return cached;
+    }
+    final computed = stores.where((store) {
       final owner = accountById(store.ownerAccountId);
       return owner.approvalStatus == ApprovalStatus.approved &&
           store.approvalStatus == ApprovalStatus.approved;
     }).toList(growable: false);
+    _approvedStoresCache = computed;
+    return computed;
+  }
+
+  HkMajorRegion? majorRegionForStore(CarWashStore store) {
+    return hkMajorRegionForAddress(store.address);
+  }
+
+  List<CarWashStore> approvedStoresInRegion(HkMajorRegion region) {
+    return approvedStores()
+        .where((store) => majorRegionForStore(store) == region)
+        .toList(growable: false);
+  }
+
+  List<CarWashStore> approvedStoresForScanContext({
+    CarWashStore? anchorStore,
+  }) {
+    if (anchorStore == null) {
+      return approvedStores();
+    }
+    final region = majorRegionForStore(anchorStore);
+    if (region == null) {
+      return approvedStores()
+          .where((store) => store.id == anchorStore.id)
+          .toList(growable: false);
+    }
+    final regional = approvedStoresInRegion(region);
+    if (regional.isEmpty) {
+      return [anchorStore];
+    }
+    return regional;
   }
 
   List<Reservation> reservationsForCurrentShop() {
@@ -1623,28 +1692,32 @@ class AppStore extends ChangeNotifier {
     final washPackage = packageById(store.id, packageId);
 
     if (_shouldUseBackendApi() && ApiClient.accessToken != null) {
-      final json = await ApiClient.createOrder({
-        'store_id': store.id,
-        'device_id': device.id,
-        'package_id': washPackage.id,
-        'amount': washPackage.price,
-        'used_free_wash_credit': useFreeWash,
-        'used_prepaid_wash_credit': usePrepaidWash,
-      });
-      final order = AppSync.orderFromJson(json);
-      if (useFreeWash) account.freeWashCredits -= 1;
-      if (usePrepaidWash) account.prepaidWashCredits -= 1;
-      orders.insert(0, order);
-      notifyListeners();
-      if (order.amount <= 0 && order.status == OrderStatus.created) {
-        final paid = await ApiClient.updateOrder(order.id, {'status': 'paid'});
-        final updated = AppSync.orderFromJson(paid);
-        final idx = orders.indexWhere((o) => o.id == order.id);
-        if (idx >= 0) orders[idx] = updated;
+      try {
+        final json = await ApiClient.createOrder({
+          'store_id': store.id,
+          'device_id': device.id,
+          'package_id': washPackage.id,
+          'amount': washPackage.price,
+          'used_free_wash_credit': useFreeWash,
+          'used_prepaid_wash_credit': usePrepaidWash,
+        });
+        final order = AppSync.orderFromJson(json);
+        account.freeWashCredits =
+            json['free_wash_credits'] as int? ?? account.freeWashCredits;
+        account.prepaidWashCredits =
+            json['prepaid_wash_credits'] as int? ?? account.prepaidWashCredits;
+        orders.insert(0, order);
+        _touchCatalog();
         notifyListeners();
-        return updated;
+        return order;
+      } on ApiConnectionException {
+        // Fall back to local order flow when backend is unreachable.
+      } on ApiException catch (exception) {
+        if (exception.statusCode != 405 && exception.statusCode != 404) {
+          rethrow;
+        }
+        // Fall back when backend route is missing or unsupported.
       }
-      return order;
     }
 
     if (useFreeWash && account.freeWashCredits <= 0) {
@@ -1669,6 +1742,7 @@ class AppStore extends ChangeNotifier {
       usedFreeWashCredit: useFreeWash,
     );
     orders.insert(0, order);
+    _touchCatalog();
     notifyListeners();
     return order;
   }
@@ -1683,9 +1757,34 @@ class AppStore extends ChangeNotifier {
       (candidate) => candidate.id == orderId,
       orElse: () => throw StateError(AppStrings.current.errOrderNotFound),
     );
+    if (order.status == OrderStatus.paid) {
+      return;
+    }
     if (order.status != OrderStatus.created) {
       throw StateError(AppStrings.current.errOrderNotPayable);
     }
+
+    if (_shouldUseBackendApi() && ApiClient.accessToken != null) {
+      try {
+        final json = await ApiClient.updateOrder(orderId, {
+          'status': 'paid',
+          'payment_transaction_id': transactionId,
+          'payment_method': paymentMethod,
+          if (providerReference != null)
+            'provider_reference': providerReference,
+        });
+        final updated = AppSync.orderFromJson(json);
+        final idx = orders.indexWhere((candidate) => candidate.id == orderId);
+        if (idx >= 0) {
+          orders[idx] = updated;
+        }
+        notifyListeners();
+        return;
+      } on ApiConnectionException {
+        // Fall back to local state when backend is unreachable.
+      }
+    }
+
     order.status = OrderStatus.paid;
     order.paymentTransactionId = transactionId;
     order.paymentMethod = paymentMethod;
@@ -1859,6 +1958,8 @@ class AppStore extends ChangeNotifier {
   void dispose() {
     _washTimer?.cancel();
     orderTick.dispose();
+    catalogTick.dispose();
+    syncUi.dispose();
     super.dispose();
   }
 
@@ -3363,18 +3464,25 @@ class UserShell extends StatefulWidget {
 
 class _UserShellState extends State<UserShell> {
   int index = 0;
-  late final List<Widget> pages = [
-    const UserHomePage(key: PageStorageKey('user_home')),
-    const BundlePurchasePage(key: PageStorageKey('user_packages'), embedded: true),
-    const UserOrdersPage(key: PageStorageKey('user_orders')),
-    const UserProfilePage(key: PageStorageKey('user_profile')),
-  ];
 
   void switchToTab(int tabIndex) {
     if (tabIndex < 0 || tabIndex > 3) {
       return;
     }
     setState(() => index = tabIndex);
+  }
+
+  Widget _buildPage(int tabIndex) {
+    return switch (tabIndex) {
+      0 => const UserHomePage(key: PageStorageKey('user_home')),
+      1 => const BundlePurchasePage(
+          key: PageStorageKey('user_packages'),
+          embedded: true,
+        ),
+      2 => const UserOrdersPage(key: PageStorageKey('user_orders')),
+      3 => const UserProfilePage(key: PageStorageKey('user_profile')),
+      _ => const SizedBox.shrink(),
+    };
   }
 
   @override
@@ -3384,15 +3492,10 @@ class _UserShellState extends State<UserShell> {
         bottom: false,
         child: Padding(
           padding: const EdgeInsets.only(bottom: kUserShellFabClearance),
-          child: AnimatedSwitcher(
-            duration: const Duration(milliseconds: 240),
-            switchInCurve: Curves.easeOutCubic,
-            switchOutCurve: Curves.easeInCubic,
-            transitionBuilder: appTabTransitionBuilder,
-            child: KeyedSubtree(
-              key: ValueKey<int>(index),
-              child: pages[index],
-            ),
+          child: LazyIndexedShell(
+            index: index,
+            pageCount: 4,
+            pageBuilder: _buildPage,
           ),
         ),
       ),
@@ -3791,7 +3894,6 @@ class _UserHomePageState extends State<UserHomePage> {
   @override
   void initState() {
     super.initState();
-    // Defer heavy Google Map init so the first frame can render without ANR.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) {
         return;
@@ -3801,194 +3903,165 @@ class _UserHomePageState extends State<UserHomePage> {
     });
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final store = AppScope.of(context);
-    final visibleStores = store.approvedStores();
-    final sortedStores = [...visibleStores]..sort(
+  List<CarWashStore> _sortedStores(AppStore appStore) {
+    final visibleStores = appStore.approvedStores();
+    return [...visibleStores]..sort(
         (a, b) => distanceBetweenKm(userLocation, a.position).compareTo(
           distanceBetweenKm(userLocation, b.position),
         ),
       );
-    final markers = {
-      Marker(
-        markerId: const MarkerId('me'),
-        position: userLocation,
-        icon: BitmapDescriptor.defaultMarkerWithHue(
-          BitmapDescriptor.hueAzure,
-        ),
-        infoWindow: InfoWindow(title: context.s.myLocation),
-      ),
-      for (final washStore in visibleStores)
-        Marker(
-          markerId: MarkerId(washStore.id),
-          position: washStore.position,
-          infoWindow: InfoWindow(
-            title: washStore.localizedName(),
-            snippet: washStore.serviceSummary,
-          ),
-          onTap: () => setState(() => selectedStore = washStore),
-        ),
-    };
-    final polylines = {
-      if (selectedStore != null)
-        Polyline(
-          polylineId: const PolylineId('route'),
-          color: Colors.blue,
-          width: 5,
-          points: [userLocation, selectedStore!.position],
-        ),
-    };
+  }
 
-    return RefreshIndicator(
-      onRefresh: () => store.syncFromBackend(),
-      child: ListView(
-      padding: const EdgeInsets.all(16),
-      physics: const AlwaysScrollableScrollPhysics(),
-      children: [
-        SectionTitle(
-          title: context.s.carWashTitle,
-          subtitle: context.s.carWashSubtitle,
-        ),
-        if (store.isSyncing) ...[
-          const SizedBox(height: 8),
-          const LinearProgressIndicator(
-            minHeight: 3,
-            backgroundColor: AppColors.primarySurface,
-          ),
-          Padding(
-            padding: const EdgeInsets.only(top: 6),
-            child: Text(
-              context.s.syncingData,
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-          ),
-        ],
-        if (store.lastSyncError != null) ...[
-          const SizedBox(height: 8),
-          Material(
-            color: Colors.orange.shade50,
-            borderRadius: BorderRadius.circular(10),
-            child: ListTile(
-              dense: true,
-              leading: Icon(Icons.cloud_off_outlined, color: Colors.orange.shade800),
-              title: Text(
-                store.lastSyncError!,
-                style: TextStyle(color: Colors.orange.shade900, fontSize: 13),
-              ),
-              subtitle: Text(context.s.syncFailedHint),
-              trailing: TextButton(
-                onPressed: store.isSyncing ? null : () => store.syncFromBackend(),
-                child: Text(context.s.retrySync),
-              ),
-            ),
-          ),
-        ],
-        if (store.runningOrder != null) ...[
-          const SizedBox(height: 12),
-          Card(
-            color: AppColors.primarySurface,
-            child: ListTile(
-              leading: const AppIconBadge(
-                icon: Icons.local_car_wash,
-                size: 44,
-              ),
-              title: Text(
-                context.s.orderInProgress,
-                style: const TextStyle(fontWeight: FontWeight.w800),
-              ),
-              subtitle: Text(context.s.clickForDetails),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () {
-                final parent =
-                    context.findAncestorStateOfType<_UserShellState>();
-                parent?.setState(() => parent.index = 2);
-              },
-            ),
-          ),
-        ],
-        const SizedBox(height: 12),
-        if (mapReady)
-          CarWashMapView(
-            key: mapKey,
-            height: 220,
-            cameraTarget: userLocation,
-            markers: markers,
-            polylines: polylines,
-            myLocationEnabled: !locating,
-            onTap: (_) {},
-          )
-        else
-          SizedBox(
-            height: 220,
-            child: Card(
-              child: Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const CircularProgressIndicator(),
-                    const SizedBox(height: 12),
-                    Text(
-                      locationMessage,
-                      style: Theme.of(context).textTheme.bodySmall,
+  @override
+  Widget build(BuildContext context) {
+    return CatalogBuilder(
+      builder: (context, appStore) {
+        final sortedStores = _sortedStores(appStore);
+        final runningOrder = appStore.runningOrder;
+        return RefreshIndicator(
+          onRefresh: () => appStore.syncFromBackend(),
+          child: CustomScrollView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            slivers: [
+              SliverPadding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+                sliver: SliverList(
+                  delegate: SliverChildListDelegate([
+                    SectionTitle(
+                      title: context.s.carWashTitle,
+                      subtitle: context.s.carWashSubtitle,
                     ),
-                  ],
+                    SyncStatusBanner(
+                      onRetry: appStore.syncFromBackend,
+                    ),
+                    if (runningOrder != null) ...[
+                      const SizedBox(height: 12),
+                      Card(
+                        color: AppColors.primarySurface,
+                        child: ListTile(
+                          leading: const AppIconBadge(
+                            icon: Icons.local_car_wash,
+                            size: 44,
+                          ),
+                          title: Text(
+                            context.s.orderInProgress,
+                            style: const TextStyle(fontWeight: FontWeight.w800),
+                          ),
+                          subtitle: Text(context.s.clickForDetails),
+                          trailing: const Icon(Icons.chevron_right),
+                          onTap: () {
+                            final parent =
+                                context.findAncestorStateOfType<_UserShellState>();
+                            parent?.switchToTab(2);
+                          },
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 12),
+                  ]),
                 ),
               ),
-            ),
-          ),
-        const SizedBox(height: 8),
-        Text(locationMessage),
-        if (locating) ...[
-          const SizedBox(height: 8),
-          const LinearProgressIndicator(),
-        ],
-        if (selectedStore != null) ...[
-          const SizedBox(height: 8),
-          NavigationPanel(
-            store: selectedStore!,
-            userLocation: userLocation,
-            distanceKm: distanceBetweenKm(
-              userLocation,
-              selectedStore!.position,
-            ),
-          ),
-        ],
-        const SizedBox(height: 16),
-        Text(context.s.nearbyStores, style: const TextStyle(fontWeight: FontWeight.w800)),
-        const SizedBox(height: 8),
-        if (sortedStores.isEmpty)
-          EmptyState(
-            icon: Icons.store_outlined,
-            title: context.s.noStores,
-            description: context.s.noStoresDesc,
-          )
-        else
-          for (final washStore in sortedStores) ...[
-            StoreCard(
-              key: ValueKey(washStore.id),
-              store: washStore,
-              distanceKm: distanceBetweenKm(userLocation, washStore.position),
-              onFocusMap: () => _focusStore(washStore),
-              onNavigate: () => _openGoogleNavigation(washStore),
-              onReserve: () => Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => CreateReservationPage(
-                    store: washStore,
-                    userLocation: userLocation,
+              SliverPadding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                sliver: SliverToBoxAdapter(
+                  child: RepaintBoundary(
+                    child: _UserHomeMapPanel(
+                      mapKey: mapKey,
+                      mapReady: mapReady,
+                      userLocation: userLocation,
+                      selectedStore: selectedStore,
+                      locating: locating,
+                      locationMessage: locationMessage,
+                      stores: appStore.approvedStores(),
+                      onStoreSelected: (washStore) {
+                        setState(() => selectedStore = washStore);
+                      },
+                    ),
                   ),
                 ),
               ),
-              onScan: () => Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => ScanPayPage(initialStore: washStore),
+              SliverPadding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                sliver: SliverList(
+                  delegate: SliverChildListDelegate([
+                    Text(locationMessage),
+                    if (locating) ...[
+                      const SizedBox(height: 8),
+                      const LinearProgressIndicator(),
+                    ],
+                    if (selectedStore != null) ...[
+                      const SizedBox(height: 8),
+                      NavigationPanel(
+                        store: selectedStore!,
+                        userLocation: userLocation,
+                        distanceKm: distanceBetweenKm(
+                          userLocation,
+                          selectedStore!.position,
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 16),
+                    Text(
+                      context.s.nearbyStores,
+                      style: const TextStyle(fontWeight: FontWeight.w800),
+                    ),
+                    const SizedBox(height: 8),
+                  ]),
                 ),
               ),
-            ),
-            const SizedBox(height: 12),
-          ],
-      ],
-    ),
+              if (sortedStores.isEmpty)
+                SliverPadding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  sliver: SliverToBoxAdapter(
+                    child: EmptyState(
+                      icon: Icons.store_outlined,
+                      title: context.s.noStores,
+                      description: context.s.noStoresDesc,
+                    ),
+                  ),
+                )
+              else
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+                  sliver: SliverList.builder(
+                    itemCount: sortedStores.length,
+                    itemBuilder: (context, index) {
+                      final washStore = sortedStores[index];
+                      return Padding(
+                        padding: EdgeInsets.only(
+                          bottom: index == sortedStores.length - 1 ? 0 : 12,
+                        ),
+                        child: StoreCard(
+                          key: ValueKey(washStore.id),
+                          store: washStore,
+                          distanceKm: distanceBetweenKm(
+                            userLocation,
+                            washStore.position,
+                          ),
+                          onFocusMap: () => _focusStore(washStore),
+                          onNavigate: () => _openGoogleNavigation(washStore),
+                          onReserve: () => Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => CreateReservationPage(
+                                store: washStore,
+                                userLocation: userLocation,
+                              ),
+                            ),
+                          ),
+                          onScan: () => Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => ScanPayPage(initialStore: washStore),
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -4017,6 +4090,18 @@ class _UserHomePageState extends State<UserHomePage> {
         });
         return;
       }
+
+      final lastKnown = await Geolocator.getLastKnownPosition();
+      if (lastKnown != null && mounted) {
+        final cachedLocation = LatLng(lastKnown.latitude, lastKnown.longitude);
+        setState(() {
+          userLocation = cachedLocation;
+          locating = true;
+          locationMessage = context.s.locationLoadingDots;
+        });
+        await mapKey.currentState?.moveCamera(cachedLocation);
+      }
+
       final position = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.medium,
       ).timeout(const Duration(seconds: 8));
@@ -4048,6 +4133,153 @@ class _UserHomePageState extends State<UserHomePage> {
       'https://www.google.com/maps/dir/?api=1&origin=${userLocation.latitude},${userLocation.longitude}&destination=${store.latitude},${store.longitude}&travelmode=driving',
     );
     await launchUrl(uri, mode: LaunchMode.externalApplication);
+  }
+}
+
+class _UserHomeMapPanel extends StatefulWidget {
+  const _UserHomeMapPanel({
+    required this.mapKey,
+    required this.mapReady,
+    required this.userLocation,
+    required this.selectedStore,
+    required this.locating,
+    required this.locationMessage,
+    required this.stores,
+    required this.onStoreSelected,
+  });
+
+  final GlobalKey<CarWashMapViewState> mapKey;
+  final bool mapReady;
+  final LatLng userLocation;
+  final CarWashStore? selectedStore;
+  final bool locating;
+  final String locationMessage;
+  final List<CarWashStore> stores;
+  final ValueChanged<CarWashStore> onStoreSelected;
+
+  @override
+  State<_UserHomeMapPanel> createState() => _UserHomeMapPanelState();
+}
+
+class _UserHomeMapPanelState extends State<_UserHomeMapPanel> {
+  static BitmapDescriptor? _userMarkerIcon;
+  static BitmapDescriptor? _storeMarkerIcon;
+
+  Set<Marker> _markers = const {};
+  Set<Polyline> _polylines = const {};
+
+  @override
+  void initState() {
+    super.initState();
+    _ensureMarkerIcons();
+    _rebuildOverlays();
+  }
+
+  @override
+  void didUpdateWidget(covariant _UserHomeMapPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.userLocation != widget.userLocation ||
+        oldWidget.selectedStore?.id != widget.selectedStore?.id ||
+        oldWidget.mapReady != widget.mapReady ||
+        _storeIdsChanged(oldWidget.stores, widget.stores)) {
+      _rebuildOverlays();
+    }
+  }
+
+  bool _storeIdsChanged(List<CarWashStore> a, List<CarWashStore> b) {
+    if (a.length != b.length) {
+      return true;
+    }
+    for (var i = 0; i < a.length; i++) {
+      if (a[i].id != b[i].id) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  Future<void> _ensureMarkerIcons() async {
+    _userMarkerIcon ??= BitmapDescriptor.defaultMarkerWithHue(
+      BitmapDescriptor.hueAzure,
+    );
+    _storeMarkerIcon ??= BitmapDescriptor.defaultMarkerWithHue(
+      BitmapDescriptor.hueRed,
+    );
+    if (mounted) {
+      _rebuildOverlays();
+    }
+  }
+
+  void _rebuildOverlays() {
+    final userIcon = _userMarkerIcon ??
+        BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure);
+    final storeIcon = _storeMarkerIcon ??
+        BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed);
+    final markers = <Marker>{
+      Marker(
+        markerId: const MarkerId('me'),
+        position: widget.userLocation,
+        icon: userIcon,
+        infoWindow: InfoWindow(title: AppStrings.current.myLocation),
+      ),
+      for (final washStore in widget.stores)
+        Marker(
+          markerId: MarkerId(washStore.id),
+          position: washStore.position,
+          icon: storeIcon,
+          infoWindow: InfoWindow(
+            title: washStore.localizedName(),
+            snippet: washStore.serviceSummary,
+          ),
+          onTap: () => widget.onStoreSelected(washStore),
+        ),
+    };
+    final polylines = <Polyline>{
+      if (widget.selectedStore != null)
+        Polyline(
+          polylineId: const PolylineId('route'),
+          color: Colors.blue,
+          width: 5,
+          points: [widget.userLocation, widget.selectedStore!.position],
+        ),
+    };
+    setState(() {
+      _markers = markers;
+      _polylines = polylines;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!widget.mapReady) {
+      return SizedBox(
+        height: 220,
+        child: Card(
+          child: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const CircularProgressIndicator(),
+                const SizedBox(height: 12),
+                Text(
+                  widget.locationMessage,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+    return CarWashMapView(
+      key: widget.mapKey,
+      height: 220,
+      cameraTarget: widget.userLocation,
+      markers: _markers,
+      polylines: _polylines,
+      myLocationEnabled: !widget.locating,
+      onTap: (_) {},
+    );
   }
 }
 
@@ -4433,8 +4665,14 @@ class _ScanPayPageState extends State<ScanPayPage> {
     final selectedStore = selectedDevice == null
         ? widget.initialStore
         : appStore.storeForDevice(selectedDevice.id);
-    final availableStores = appStore.approvedStores();
-    final packages = selectedStore?.packages ?? availableStores.first.packages;
+    final anchorStore = selectedStore ?? widget.initialStore;
+    final availableStores = appStore.approvedStoresForScanContext(
+      anchorStore: anchorStore,
+    );
+    final packages = selectedStore?.packages ??
+        (availableStores.isNotEmpty
+            ? availableStores.first.packages
+            : appStore.approvedStores().first.packages);
     if (!packages.any((washPackage) => washPackage.id == selectedPackageId)) {
       selectedPackageId = packages.first.id;
     }
@@ -4684,12 +4922,17 @@ class _ScanPayPageState extends State<ScanPayPage> {
       }
 
       if (order.amount <= 0) {
-        await appStore.markOrderPaid(
-          order.id,
-          transactionId: 'FREE-${order.id}',
-          paymentMethod: context.s.freeWashLabel,
+        if (order.status == OrderStatus.created) {
+          await appStore.markOrderPaid(
+            order.id,
+            transactionId: 'FREE-${order.id}',
+            paymentMethod: context.s.freeWashLabel,
+          );
+        }
+        final latestOrder = appStore.orders.firstWhere(
+          (candidate) => candidate.id == order.id,
         );
-        await appStore.startOrder(order);
+        await appStore.startOrder(latestOrder);
         if (!context.mounted) {
           return;
         }
@@ -4712,36 +4955,12 @@ class _ScanPayPageState extends State<ScanPayPage> {
       final storeName = selectedStore?.name ?? context.s.defaultCarWashStore;
       final packageName = selectedPackage.localizedName();
 
-      final paid = await Navigator.of(context).push<bool>(
-        MaterialPageRoute(
-          builder: (_) => PaymentPage(
-            checkout: PaymentCheckoutArgs(
-              orderId: order.id,
-              storeName: storeName,
-              packageName: packageName,
-              amount: order.amount,
-              usedFreeWash: order.usedFreeWashCredit,
-              payerDisplayName: appStore.currentAccount?.displayName ?? context.s.defaultUserLabel,
-              payerPhone: appStore.currentAccount?.phone ?? '',
-              onPaymentConfirmed: ({
-                required transactionId,
-                required method,
-                providerReference,
-              }) async {
-                await appStore.markOrderPaid(
-                  order.id,
-                  transactionId: transactionId,
-                  paymentMethod: method.label,
-                  providerReference: providerReference,
-                );
-                final latestOrder = appStore.orders.firstWhere(
-                  (candidate) => candidate.id == order.id,
-                );
-                await appStore.startOrder(latestOrder);
-              },
-            ),
-          ),
-        ),
+      final paid = await launchWashOrderPayment(
+        context: context,
+        appStore: appStore,
+        order: order,
+        storeName: storeName,
+        packageName: packageName,
       );
       if (paid == true && context.mounted) {
         Navigator.of(context).pop();
@@ -4810,25 +5029,24 @@ class ShopShell extends StatefulWidget {
 class _ShopShellState extends State<ShopShell> {
   int index = 0;
 
+  Widget _buildPage(int tabIndex) {
+    return switch (tabIndex) {
+      0 => const ShopStoresPage(),
+      1 => const ShopReservationsPage(),
+      2 => const ShopPricingPage(),
+      3 => const ShopProfilePage(),
+      _ => const SizedBox.shrink(),
+    };
+  }
+
   @override
   Widget build(BuildContext context) {
-    final pages = [
-      const ShopStoresPage(),
-      const ShopReservationsPage(),
-      const ShopPricingPage(),
-      const ShopProfilePage(),
-    ];
     return Scaffold(
       body: SafeArea(
-        child: AnimatedSwitcher(
-          duration: const Duration(milliseconds: 240),
-          switchInCurve: Curves.easeOutCubic,
-          switchOutCurve: Curves.easeInCubic,
-          transitionBuilder: appTabTransitionBuilder,
-          child: KeyedSubtree(
-            key: ValueKey<int>(index),
-            child: pages[index],
-          ),
+        child: LazyIndexedShell(
+          index: index,
+          pageCount: 4,
+          pageBuilder: _buildPage,
         ),
       ),
       bottomNavigationBar: AppBottomNav(
@@ -4866,32 +5084,45 @@ class ShopStoresPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final appStore = AppScope.of(context);
-    return AnimatedBuilder(
-      animation: appStore,
-      builder: (context, _) {
+    return CatalogBuilder(
+      builder: (context, appStore) {
         final stores = appStore.storesForCurrentShop();
-        return ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            TopBar(
-              title: context.s.shopMerchantTitle,
-              subtitle: context.s.shopMerchantSubtitleNamed(
-                appStore.currentAccount?.displayName ?? '',
+        return CustomScrollView(
+          slivers: [
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+              sliver: SliverList(
+                delegate: SliverChildListDelegate([
+                  TopBar(
+                    title: context.s.shopMerchantTitle,
+                    subtitle: context.s.shopMerchantSubtitleNamed(
+                      appStore.currentAccount?.displayName ?? '',
+                    ),
+                  ),
+                  FilledButton.icon(
+                    onPressed: () => Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => const AddShopStorePage()),
+                    ),
+                    icon: const Icon(Icons.add_business),
+                    label: Text(context.s.addNewShopBtn),
+                  ),
+                  const SizedBox(height: 12),
+                ]),
               ),
             ),
-            FilledButton.icon(
-              onPressed: () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const AddShopStorePage()),
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+              sliver: SliverList.builder(
+                itemCount: stores.length,
+                itemBuilder: (context, index) {
+                  final store = stores[index];
+                  return Padding(
+                    padding: EdgeInsets.only(bottom: index == stores.length - 1 ? 0 : 12),
+                    child: ShopStoreCard(store: store, showAddBay: true),
+                  );
+                },
               ),
-              icon: const Icon(Icons.add_business),
-              label: Text(context.s.addNewShopBtn),
             ),
-            const SizedBox(height: 12),
-            for (final store in stores) ...[
-              ShopStoreCard(store: store, showAddBay: true),
-              const SizedBox(height: 12),
-            ],
           ],
         );
       },
@@ -4960,10 +5191,8 @@ class _ShopOrdersPageState extends State<ShopOrdersPage> {
 
   @override
   Widget build(BuildContext context) {
-    final appStore = AppScope.of(context);
-    return AnimatedBuilder(
-      animation: appStore,
-      builder: (context, _) {
+    return CatalogBuilder(
+      builder: (context, appStore) {
         final stores = appStore.storesForCurrentShop();
         final orders = appStore.ordersForCurrentShop().where((item) {
           return selectedStoreId == 'all' || item.storeId == selectedStoreId;
@@ -4971,58 +5200,80 @@ class _ShopOrdersPageState extends State<ShopOrdersPage> {
         final completed = orders
             .where((order) => order.status == OrderStatus.completed)
             .length;
-        return ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            TopBar(
-              title: context.s.shopOrdersTitle,
-              subtitle: context.s.shopOrdersSubtitle,
-            ),
-            StoreFilterDropdown(
-              stores: stores,
-              value: selectedStoreId,
-              onChanged: (value) => setState(() => selectedStoreId = value),
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: MetricCard(
-                    label: context.s.collected,
-                    value:
-                        '¥${appStore.receivedRevenueForCurrentShop(storeId: selectedStoreId == 'all' ? null : selectedStoreId).toStringAsFixed(0)}',
-                    icon: Icons.payments,
+        return CustomScrollView(
+          slivers: [
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+              sliver: SliverList(
+                delegate: SliverChildListDelegate([
+                  TopBar(
+                    title: context.s.shopOrdersTitle,
+                    subtitle: context.s.shopOrdersSubtitle,
                   ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: MetricCard(
-                    label: context.s.pendingPay,
-                    value:
-                        context.s.orderCountUnit(appStore.pendingPaymentCountForCurrentShop(storeId: selectedStoreId == 'all' ? null : selectedStoreId)),
-                    icon: Icons.hourglass_empty,
+                  StoreFilterDropdown(
+                    stores: stores,
+                    value: selectedStoreId,
+                    onChanged: (value) => setState(() => selectedStoreId = value),
                   ),
-                ),
-              ],
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: MetricCard(
+                          label: context.s.collected,
+                          value:
+                              '¥${appStore.receivedRevenueForCurrentShop(storeId: selectedStoreId == 'all' ? null : selectedStoreId).toStringAsFixed(0)}',
+                          icon: Icons.payments,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: MetricCard(
+                          label: context.s.pendingPay,
+                          value: context.s.orderCountUnit(
+                            appStore.pendingPaymentCountForCurrentShop(
+                              storeId: selectedStoreId == 'all' ? null : selectedStoreId,
+                            ),
+                          ),
+                          icon: Icons.hourglass_empty,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  MetricCard(
+                    label: context.s.completedOrdersLabel,
+                    value: '$completed / ${orders.length}',
+                    icon: Icons.done_all,
+                  ),
+                  const SizedBox(height: 12),
+                ]),
+              ),
             ),
-            const SizedBox(height: 8),
-            MetricCard(
-              label: context.s.completedOrdersLabel,
-              value: '$completed / ${orders.length}',
-              icon: Icons.done_all,
-            ),
-            const SizedBox(height: 12),
             if (orders.isEmpty)
-              EmptyState(
-                icon: Icons.receipt_long_outlined,
-                title: context.s.noOrdersShopTitle,
-                description: context.s.shopOrdersEmptyDesc,
+              SliverPadding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                sliver: SliverToBoxAdapter(
+                  child: EmptyState(
+                    icon: Icons.receipt_long_outlined,
+                    title: context.s.noOrdersShopTitle,
+                    description: context.s.shopOrdersEmptyDesc,
+                  ),
+                ),
               )
             else
-              for (final order in orders) ...[
-                OrderCard(order: order),
-                const SizedBox(height: 8),
-              ],
+              SliverPadding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                sliver: SliverList.builder(
+                  itemCount: orders.length,
+                  itemBuilder: (context, index) {
+                    return Padding(
+                      padding: EdgeInsets.only(bottom: index == orders.length - 1 ? 0 : 8),
+                      child: OrderCard(order: orders[index]),
+                    );
+                  },
+                ),
+              ),
           ],
         );
       },
@@ -5060,27 +5311,26 @@ class _AdminShellState extends State<AdminShell> {
     }
   }
 
+  Widget _buildPage(int tabIndex) {
+    return switch (tabIndex) {
+      0 => AdminApprovalPage(onQueueChanged: _refreshPendingCount),
+      1 => const AdminOverviewPage(),
+      2 => const AdminStoresPage(),
+      3 => const AdminReservationsPage(),
+      4 => const AdminOrdersPage(),
+      5 => const AdminPricingPage(),
+      _ => const SizedBox.shrink(),
+    };
+  }
+
   @override
   Widget build(BuildContext context) {
-    final pages = [
-      AdminApprovalPage(onQueueChanged: _refreshPendingCount),
-      const AdminOverviewPage(),
-      const AdminStoresPage(),
-      const AdminReservationsPage(),
-      const AdminOrdersPage(),
-      const AdminPricingPage(),
-    ];
     return Scaffold(
       body: SafeArea(
-        child: AnimatedSwitcher(
-          duration: const Duration(milliseconds: 240),
-          switchInCurve: Curves.easeOutCubic,
-          switchOutCurve: Curves.easeInCubic,
-          transitionBuilder: appTabTransitionBuilder,
-          child: KeyedSubtree(
-            key: ValueKey<int>(index),
-            child: pages[index],
-          ),
+        child: LazyIndexedShell(
+          index: index,
+          pageCount: 6,
+          pageBuilder: _buildPage,
         ),
       ),
       bottomNavigationBar: AppBottomNav(
@@ -5506,18 +5756,34 @@ class AdminStoresPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final appStore = AppScope.of(context);
-    return AnimatedBuilder(
-      animation: appStore,
-      builder: (context, _) {
-        return ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            TopBar(title: context.s.storesAndBays, subtitle: context.s.storesAndBaysSubtitle),
-            for (final store in appStore.stores) ...[
-              ShopStoreCard(store: store),
-              const SizedBox(height: 12),
-            ],
+    return CatalogBuilder(
+      builder: (context, appStore) {
+        return CustomScrollView(
+          slivers: [
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+              sliver: SliverToBoxAdapter(
+                child: TopBar(
+                  title: context.s.storesAndBays,
+                  subtitle: context.s.storesAndBaysSubtitle,
+                ),
+              ),
+            ),
+            SliverPadding(
+              padding: const EdgeInsets.all(16),
+              sliver: SliverList.builder(
+                itemCount: appStore.stores.length,
+                itemBuilder: (context, index) {
+                  final store = appStore.stores[index];
+                  return Padding(
+                    padding: EdgeInsets.only(
+                      bottom: index == appStore.stores.length - 1 ? 0 : 12,
+                    ),
+                    child: ShopStoreCard(store: store),
+                  );
+                },
+              ),
+            ),
           ],
         );
       },
@@ -5530,24 +5796,49 @@ class AdminReservationsPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final appStore = AppScope.of(context);
-    return AnimatedBuilder(
-      animation: appStore,
-      builder: (context, _) {
-        return ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            TopBar(title: context.s.allReservationsAdmin, subtitle: context.s.reservationFormShopSubtitle),
+    return CatalogBuilder(
+      builder: (context, appStore) {
+        return CustomScrollView(
+          slivers: [
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+              sliver: SliverToBoxAdapter(
+                child: TopBar(
+                  title: context.s.allReservationsAdmin,
+                  subtitle: context.s.reservationFormShopSubtitle,
+                ),
+              ),
+            ),
             if (appStore.reservations.isEmpty)
-              EmptyState(
-                  icon: Icons.assignment_outlined,
-                  title: context.s.noReservationsYet,
-                  description: context.s.adminReservationsEmptyDesc)
+              SliverPadding(
+                padding: const EdgeInsets.all(16),
+                sliver: SliverToBoxAdapter(
+                  child: EmptyState(
+                    icon: Icons.assignment_outlined,
+                    title: context.s.noReservationsYet,
+                    description: context.s.adminReservationsEmptyDesc,
+                  ),
+                ),
+              )
             else
-              for (final reservation in appStore.reservations) ...[
-                ReservationCard(reservation: reservation, showActions: true),
-                const SizedBox(height: 8),
-              ],
+              SliverPadding(
+                padding: const EdgeInsets.all(16),
+                sliver: SliverList.builder(
+                  itemCount: appStore.reservations.length,
+                  itemBuilder: (context, index) {
+                    final reservation = appStore.reservations[index];
+                    return Padding(
+                      padding: EdgeInsets.only(
+                        bottom: index == appStore.reservations.length - 1 ? 0 : 8,
+                      ),
+                      child: ReservationCard(
+                        reservation: reservation,
+                        showActions: true,
+                      ),
+                    );
+                  },
+                ),
+              ),
           ],
         );
       },
@@ -5560,24 +5851,45 @@ class AdminOrdersPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final appStore = AppScope.of(context);
-    return AnimatedBuilder(
-      animation: appStore,
-      builder: (context, _) {
-        return ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            TopBar(title: context.s.allOrdersAdmin, subtitle: context.s.shopOrdersSubtitle),
+    return CatalogBuilder(
+      builder: (context, appStore) {
+        return CustomScrollView(
+          slivers: [
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+              sliver: SliverToBoxAdapter(
+                child: TopBar(
+                  title: context.s.allOrdersAdmin,
+                  subtitle: context.s.shopOrdersSubtitle,
+                ),
+              ),
+            ),
             if (appStore.orders.isEmpty)
-              EmptyState(
-                  icon: Icons.receipt_long_outlined,
-                  title: context.s.noOrdersShopTitle,
-                  description: context.s.adminOrdersEmptyDesc)
+              SliverPadding(
+                padding: const EdgeInsets.all(16),
+                sliver: SliverToBoxAdapter(
+                  child: EmptyState(
+                    icon: Icons.receipt_long_outlined,
+                    title: context.s.noOrdersShopTitle,
+                    description: context.s.adminOrdersEmptyDesc,
+                  ),
+                ),
+              )
             else
-              for (final order in appStore.orders) ...[
-                OrderCard(order: order),
-                const SizedBox(height: 8),
-              ],
+              SliverPadding(
+                padding: const EdgeInsets.all(16),
+                sliver: SliverList.builder(
+                  itemCount: appStore.orders.length,
+                  itemBuilder: (context, index) {
+                    return Padding(
+                      padding: EdgeInsets.only(
+                        bottom: index == appStore.orders.length - 1 ? 0 : 8,
+                      ),
+                      child: OrderCard(order: appStore.orders[index]),
+                    );
+                  },
+                ),
+              ),
           ],
         );
       },
@@ -6290,6 +6602,72 @@ class DeviceStatusList extends StatelessWidget {
   }
 }
 
+Future<bool> launchWashOrderPayment({
+  required BuildContext context,
+  required AppStore appStore,
+  required WashOrder order,
+  required String storeName,
+  required String packageName,
+}) {
+  if (order.status != OrderStatus.created) {
+    return Future.value(false);
+  }
+  if (order.amount <= 0) {
+    return _completeZeroAmountOrder(context, appStore, order);
+  }
+  return Navigator.of(context).push<bool>(
+    MaterialPageRoute(
+      builder: (_) => PaymentPage(
+        checkout: PaymentCheckoutArgs(
+          orderId: order.id,
+          storeName: storeName,
+          packageName: packageName,
+          amount: order.amount,
+          usedFreeWash: order.usedFreeWashCredit,
+          payerDisplayName:
+              appStore.currentAccount?.displayName ?? context.s.defaultUserLabel,
+          payerPhone: appStore.currentAccount?.phone ?? '',
+          onPaymentConfirmed: ({
+            required transactionId,
+            required method,
+            providerReference,
+          }) async {
+            await appStore.markOrderPaid(
+              order.id,
+              transactionId: transactionId,
+              paymentMethod: method.label,
+              providerReference: providerReference,
+            );
+            final latestOrder = appStore.orders.firstWhere(
+              (candidate) => candidate.id == order.id,
+            );
+            await appStore.startOrder(latestOrder);
+          },
+        ),
+      ),
+    ),
+  ).then((paid) => paid ?? false);
+}
+
+Future<bool> _completeZeroAmountOrder(
+  BuildContext context,
+  AppStore appStore,
+  WashOrder order,
+) async {
+  if (order.status == OrderStatus.created) {
+    await appStore.markOrderPaid(
+      order.id,
+      transactionId: 'FREE-${order.id}',
+      paymentMethod: context.s.freeWashLabel,
+    );
+  }
+  final latestOrder = appStore.orders.firstWhere(
+    (candidate) => candidate.id == order.id,
+  );
+  await appStore.startOrder(latestOrder);
+  return true;
+}
+
 class ScanDeviceSummary extends StatelessWidget {
   const ScanDeviceSummary({
     required this.store,
@@ -6395,6 +6773,7 @@ class OrderCard extends StatelessWidget {
     final device = appStore.deviceById(order.deviceId);
     final washPackage = appStore.packageById(order.storeId, order.packageId);
     final isAdmin = appStore.currentAccount?.role == AccountRole.admin;
+    final isUser = appStore.currentAccount?.role == AccountRole.user;
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -6482,6 +6861,51 @@ class OrderCard extends StatelessWidget {
                 onPressed: () => appStore.simulatePaymentAndStart(order),
                 icon: const Icon(Icons.payments_outlined),
                 label: Text(context.s.simulatePayStart),
+              ),
+            ],
+            if (isUser && order.status == OrderStatus.created) ...[
+              const SizedBox(height: 12),
+              FilledButton.icon(
+                onPressed: () async {
+                  if (order.amount <= 0) {
+                    await _completeZeroAmountOrder(context, appStore, order);
+                    if (!context.mounted) {
+                      return;
+                    }
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(context.s.orderStartedFree(order.id)),
+                      ),
+                    );
+                    return;
+                  }
+                  final paid = await launchWashOrderPayment(
+                    context: context,
+                    appStore: appStore,
+                    order: order,
+                    storeName: store.localizedName(),
+                    packageName: washPackage.localizedName(),
+                  );
+                  if (paid && context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text(context.s.paySuccess)),
+                    );
+                  }
+                },
+                icon: const Icon(Icons.payments_outlined),
+                label: Text(
+                  order.amount > 0
+                      ? context.s.goToPayment(order.amount)
+                      : context.s.confirmStartWash,
+                ),
+              ),
+            ],
+            if (isUser && order.status == OrderStatus.paid) ...[
+              const SizedBox(height: 12),
+              FilledButton.tonalIcon(
+                onPressed: () => appStore.startOrder(order),
+                icon: const Icon(Icons.play_arrow_rounded),
+                label: Text(context.s.confirmStartWash),
               ),
             ],
             if (order.status == OrderStatus.running) ...[

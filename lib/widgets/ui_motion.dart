@@ -105,11 +105,11 @@ Widget appTabTransitionBuilder(Widget child, Animation<double> animation) {
 }
 
 PageTransitionsTheme buildAppPageTransitionsTheme() {
-  return PageTransitionsTheme(
+  return const PageTransitionsTheme(
     builders: {
       TargetPlatform.android: CupertinoPageTransitionsBuilder(),
       TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
-      TargetPlatform.windows: const FadeUpwardsPageTransitionsBuilder(),
+      TargetPlatform.windows: FadeUpwardsPageTransitionsBuilder(),
     },
   );
 }

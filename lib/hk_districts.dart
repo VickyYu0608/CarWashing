@@ -150,3 +150,46 @@ HkDistrict? hkDistrictByName(String nameZh) {
   }
   return null;
 }
+
+String _hkDistrictShortName(String districtNameZh) {
+  if (districtNameZh.endsWith('区')) {
+    return districtNameZh.substring(0, districtNameZh.length - 1);
+  }
+  return districtNameZh;
+}
+
+/// Resolves the official HK district from a full shop address string.
+HkDistrict? hkDistrictForAddress(String address) {
+  HkDistrict? best;
+  var bestLength = 0;
+  for (final district in kHkDistricts) {
+    if (address.contains(district.nameZh) &&
+        district.nameZh.length > bestLength) {
+      best = district;
+      bestLength = district.nameZh.length;
+      continue;
+    }
+    final shortName = _hkDistrictShortName(district.nameZh);
+    if (shortName != district.nameZh &&
+        address.contains(shortName) &&
+        shortName.length > bestLength) {
+      best = district;
+      bestLength = shortName.length;
+    }
+  }
+  return best;
+}
+
+/// Resolves the major HK region (港岛 / 九龙 / 新界) from a shop address.
+HkMajorRegion? hkMajorRegionForAddress(String address) {
+  final district = hkDistrictForAddress(address);
+  if (district != null) {
+    return district.majorRegion;
+  }
+  for (final region in HkMajorRegion.values) {
+    if (address.contains(region.label)) {
+      return region;
+    }
+  }
+  return null;
+}

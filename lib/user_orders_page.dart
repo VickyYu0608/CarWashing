@@ -1,6 +1,7 @@
 import 'package:car_washing_app/app_theme.dart';
 import 'package:car_washing_app/l10n/locale_controller.dart';
 import 'package:car_washing_app/main.dart';
+import 'package:car_washing_app/widgets/app_performance.dart';
 import 'package:flutter/material.dart';
 
 enum _UserOrderTab { all, unpaid, inProgress, completed }
@@ -32,10 +33,8 @@ class _UserOrdersPageState extends State<UserOrdersPage>
   @override
   Widget build(BuildContext context) {
     final s = context.s;
-    final appStore = AppScope.of(context);
-    return AnimatedBuilder(
-      animation: appStore,
-      builder: (context, _) {
+    return CatalogBuilder(
+      builder: (context, appStore) {
         final selfOrders = appStore.orders
             .where(
               (order) => order.userAccountId == appStore.currentAccount?.id,
@@ -117,14 +116,17 @@ class _UserOrdersPageState extends State<UserOrdersPage>
       );
     }
 
-    return ListView(
+    return ListView.builder(
       padding: const EdgeInsets.all(16),
-      children: [
-        for (final order in filtered) ...[
-          OrderCard(order: order),
-          const SizedBox(height: 10),
-        ],
-      ],
+      itemCount: filtered.length,
+      itemBuilder: (context, index) {
+        return Padding(
+          padding: EdgeInsets.only(bottom: index == filtered.length - 1 ? 0 : 10),
+          child: RepaintBoundary(
+            child: OrderCard(order: filtered[index]),
+          ),
+        );
+      },
     );
   }
 

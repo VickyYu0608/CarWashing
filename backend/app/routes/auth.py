@@ -89,6 +89,13 @@ class RedeemReferralRequest(BaseModel):
     code: str
 
 
+class UpdateMeRequest(BaseModel):
+    display_name: str | None = None
+    phone: str | None = None
+    password: str | None = None
+    auto_use_free_wash: bool | None = None
+
+
 @router.post("/email/send")
 def send_email_code(body: SendEmailCodeRequest, db: Session = Depends(get_db)):
     settings = get_settings()
@@ -285,6 +292,25 @@ def redeem_referral(
     payload["referrer_free_wash_credits"] = referrer.free_wash_credits
     payload["referrer_id"] = referrer.id
     return payload
+
+
+@router.patch("/me")
+def update_me(
+    body: UpdateMeRequest,
+    db: Session = Depends(get_db),
+    account: AccountRecord = Depends(get_current_account),
+):
+    if body.display_name is not None:
+        account.display_name = body.display_name.strip()
+    if body.phone is not None:
+        account.phone = body.phone.strip()
+    if body.password is not None and body.password.strip():
+        account.password_hash = _hash_password(body.password.strip())
+    if body.auto_use_free_wash is not None:
+        account.auto_use_free_wash = body.auto_use_free_wash
+    db.commit()
+    db.refresh(account)
+    return _account_to_json(account)
 
 
 @router.get("/me")
