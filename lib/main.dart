@@ -439,35 +439,19 @@ class AppStore extends ChangeNotifier {
     notifyListeners();
     try {
       final account = currentAccount!;
-      final storeFuture = account.role == AccountRole.shop
-          ? ApiClient.fetchMyStores()
-          : ApiClient.fetchStores();
-      final results = await Future.wait([
-        storeFuture,
-        ApiClient.fetchOrders(),
-        ApiClient.fetchReservations(),
-        ApiClient.fetchBundles(),
-      ]);
-      final storeJson = results[0];
-      final orderJson = results[1];
-      final resJson = results[2];
-      final bundleJson = results[3];
-
+      final storeJson = account.role == AccountRole.shop
+          ? await ApiClient.fetchMyStores()
+          : await ApiClient.fetchStores();
       stores
         ..clear()
         ..addAll(AppSync.parseStores(storeJson));
-      orders
-        ..clear()
-        ..addAll(AppSync.parseOrders(orderJson));
-      reservations
-        ..clear()
-        ..addAll(AppSync.parseReservations(resJson));
-      bundlePlans = bundleJson;
       _touchCatalog();
       lastSyncError = null;
+      isSyncing = false;
       _publishSyncUi(clearError: true);
       notifyListeners();
 
+      unawaited(_syncSecondaryCatalogData());
       unawaited(_syncSecondaryProfileData(account));
     } on ApiException catch (exception) {
       lastSyncError = exception.message;
@@ -482,6 +466,27 @@ class AppStore extends ChangeNotifier {
       isSyncing = false;
       _publishSyncUi();
       notifyListeners();
+    }
+  }
+
+  Future<void> _syncSecondaryCatalogData() async {
+    try {
+      final results = await Future.wait([
+        ApiClient.fetchOrders(),
+        ApiClient.fetchReservations(),
+        ApiClient.fetchBundles(),
+      ]);
+      orders
+        ..clear()
+        ..addAll(AppSync.parseOrders(results[0]));
+      reservations
+        ..clear()
+        ..addAll(AppSync.parseReservations(results[1]));
+      bundlePlans = results[2];
+      _touchCatalog();
+      notifyListeners();
+    } on Object {
+      // Orders/reservations/bundles are non-blocking for the home screen.
     }
   }
 
@@ -1396,9 +1401,16 @@ class AppStore extends ChangeNotifier {
 
   List<CarWashStore> approvedStoresForScanContext({
     CarWashStore? anchorStore,
+    bool restrictToAnchorStore = false,
   }) {
     if (anchorStore == null) {
       return approvedStores();
+    }
+    if (restrictToAnchorStore) {
+      final scoped = approvedStores()
+          .where((store) => store.id == anchorStore.id)
+          .toList(growable: false);
+      return scoped.isEmpty ? [anchorStore] : scoped;
     }
     final region = majorRegionForStore(anchorStore);
     if (region == null) {
@@ -3887,20 +3899,14 @@ class _UserHomePageState extends State<UserHomePage> {
   final GlobalKey<CarWashMapViewState> mapKey = GlobalKey<CarWashMapViewState>();
   LatLng userLocation = fallbackUserLocation;
   CarWashStore? selectedStore;
-  bool locating = true;
-  bool mapReady = false;
-  String locationMessage = AppStrings.current.locationLoadingDots;
+  bool locating = false;
+  bool mapReady = true;
+  String locationMessage = AppStrings.current.locationSuccessSorted;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) {
-        return;
-      }
-      setState(() => mapReady = true);
-      _loadLocation();
-    });
+    _loadLocation();
   }
 
   List<CarWashStore> _sortedStores(AppStore appStore) {
@@ -4096,15 +4102,18 @@ class _UserHomePageState extends State<UserHomePage> {
         final cachedLocation = LatLng(lastKnown.latitude, lastKnown.longitude);
         setState(() {
           userLocation = cachedLocation;
+        });
+        await mapKey.currentState?.moveCamera(cachedLocation);
+      } else if (mounted) {
+        setState(() {
           locating = true;
           locationMessage = context.s.locationLoadingDots;
         });
-        await mapKey.currentState?.moveCamera(cachedLocation);
       }
 
       final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.medium,
-      ).timeout(const Duration(seconds: 8));
+        desiredAccuracy: LocationAccuracy.low,
+      ).timeout(const Duration(seconds: 4));
       if (!mounted) return;
       final location = LatLng(position.latitude, position.longitude);
       setState(() {
@@ -4637,6 +4646,7 @@ class ScanPayPage extends StatefulWidget {
 class _ScanPayPageState extends State<ScanPayPage> {
   late String qrCode;
   late String selectedPackageId;
+  CarWashStore? activeStore;
   bool useFreeWashThisOrder = false;
   bool usePrepaidWashThisOrder = false;
   bool isProcessing = false;
@@ -4645,8 +4655,12 @@ class _ScanPayPageState extends State<ScanPayPage> {
   @override
   void initState() {
     super.initState();
+    activeStore = widget.initialStore;
+    final storeDevices = activeStore?.devices ?? <WashDevice>[];
     WashDevice? firstIdleDevice;
-    for (final device in widget.initialStore?.devices ?? <WashDevice>[]) {
+    WashDevice? firstDevice;
+    for (final device in storeDevices) {
+      firstDevice ??= device;
       if (device.status == DeviceStatus.idle) {
         firstIdleDevice = device;
         break;
@@ -4654,21 +4668,25 @@ class _ScanPayPageState extends State<ScanPayPage> {
     }
     qrCode = widget.initialQrCode ??
         firstIdleDevice?.qrCode ??
-        'CARWASH-1001';
+        firstDevice?.qrCode ??
+        '';
     selectedPackageId = widget.initialStore?.packages.first.id ?? 'basic';
   }
 
   @override
   Widget build(BuildContext context) {
     final appStore = AppScope.of(context);
-    final selectedDevice = appStore.deviceByQr(qrCode);
-    final selectedStore = selectedDevice == null
-        ? widget.initialStore
-        : appStore.storeForDevice(selectedDevice.id);
-    final anchorStore = selectedStore ?? widget.initialStore;
+    final anchorStore = activeStore;
     final availableStores = appStore.approvedStoresForScanContext(
       anchorStore: anchorStore,
+      restrictToAnchorStore: anchorStore != null,
     );
+    final selectedDevice =
+        qrCode.isEmpty ? null : appStore.deviceByQr(qrCode);
+    final selectedStore = anchorStore ??
+        (selectedDevice == null
+            ? null
+            : appStore.storeForDevice(selectedDevice.id));
     final packages = selectedStore?.packages ??
         (availableStores.isNotEmpty
             ? availableStores.first.packages
@@ -4712,8 +4730,12 @@ class _ScanPayPageState extends State<ScanPayPage> {
                           MaterialPageRoute(builder: (_) => const QrScanPage()),
                         );
                         if (code == null) return;
+                        final device = appStore.deviceByQr(code);
                         setState(() {
                           qrCode = code;
+                          activeStore = device == null
+                              ? widget.initialStore
+                              : appStore.storeForDevice(device.id);
                           error = null;
                         });
                       },
@@ -4745,10 +4767,11 @@ class _ScanPayPageState extends State<ScanPayPage> {
                         }
                         final device = appStore.deviceByQr(value);
                         final store = device == null
-                            ? null
+                            ? activeStore
                             : appStore.storeForDevice(device.id);
                         setState(() {
                           qrCode = value;
+                          activeStore = store ?? activeStore;
                           selectedPackageId =
                               store?.packages.first.id ?? selectedPackageId;
                           error = null;
